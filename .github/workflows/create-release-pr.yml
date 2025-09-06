@@ -50,14 +50,13 @@ jobs:
           # Get the default branch
           DEFAULT_BRANCH=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')
           
-          # Get the last release tag using GitHub API
-          LAST_TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>/dev/null || echo "")
+          # Get the last release tag (returns empty for first release)
+          LAST_TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>/dev/null || true)
           
-          # Log the tag status
-          if [ -z "$LAST_TAG" ]; then
-            echo "No previous releases found, generating notes from beginning"
-          else
+          if [ -n "$LAST_TAG" ]; then
             echo "Previous release: $LAST_TAG"
+          else
+            echo "No previous releases found, generating notes from beginning"
           fi
           
           # Generate release notes with or without previous tag
