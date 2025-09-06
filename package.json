@@ -1,0 +1,27 @@
+{
+  "name": "setup-npm-trusted-publish",
+  "version": "1.0.0",
+  "description": "Setup npm package for trusted publishing with OIDC",
+  "type": "module",
+  "bin": {
+    "setup-npm-trusted-publish": "./bin/cli.js"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types ./test/test.ts"
+  },
+  "keywords": [
+    "npm",
+    "oidc",
+    "trusted-publishing",
+    "setup"
+  ],
+  "author": "azu <azuciao@gmail.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ]
+}
