@@ -17,6 +17,14 @@
   ],
   "author": "azu <azuciao@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/azu/setup-npm-trusted-publish.git"
+  },
+  "bugs": {
+    "url": "https://github.com/azu/setup-npm-trusted-publish/issues"
+  },
+  "homepage": "https://github.com/azu/setup-npm-trusted-publish#readme",
   "engines": {
     "node": ">=20.0.0"
   },
