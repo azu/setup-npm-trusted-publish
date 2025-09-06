@@ -46,7 +46,7 @@ setup-npm-trusted-publish my-package --dry-run
 
 This tool:
 1. Creates a minimal npm package in a temporary directory
-2. Generates a `package.json` with `publishConfig.provenance: true`
+2. Generates a `package.json` with basic metadata for OIDC setup
 3. Creates a `README.md` that **clearly states the package is for OIDC setup only**
 4. Automatically publishes the package to npm
 5. Cleans up the temporary directory

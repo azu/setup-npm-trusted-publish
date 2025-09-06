@@ -93,15 +93,7 @@ try {
     name: packageName,
     version: '0.0.1',
     description: `OIDC trusted publishing setup package for ${packageName}`,
-    keywords: ['oidc', 'trusted-publishing', 'setup'],
-    license: 'MIT',
-    repository: {
-      type: 'git',
-      url: 'https://github.com/YOUR_USERNAME/YOUR_REPOSITORY'
-    },
-    publishConfig: {
-      provenance: true
-    }
+    keywords: ['oidc', 'trusted-publishing', 'setup']
   };
 
   await writeFile(
