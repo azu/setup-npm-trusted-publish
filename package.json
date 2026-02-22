@@ -1,7 +1,7 @@
 {
   "name": "setup-npm-trusted-publish",
-  "version": "1.0.3",
-  "description": "Setup npm package for trusted publishing with OIDC",
+  "version": "0.1.0",
+  "description": "Setup npm package for trusted publishing with OIDC, but using 0.0.0-dummy as release version",
   "type": "module",
   "bin": {
     "setup-npm-trusted-publish": "./bin/cli.js"
@@ -15,16 +15,16 @@
     "trusted-publishing",
     "setup"
   ],
-  "author": "azu <azuciao@gmail.com>",
+  "author": "johanna-herrmann <johanna.herrmann@mailbox.org>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/azu/setup-npm-trusted-publish.git"
+    "url": "git+https://github.com/johanna-herrmann/setup-npm-trusted-publish-pre-release.git"
   },
   "bugs": {
-    "url": "https://github.com/azu/setup-npm-trusted-publish/issues"
+    "url": "https://github.com/johanna-herrmann/setup-npm-trusted-publish-pre-release/issues"
   },
-  "homepage": "https://github.com/azu/setup-npm-trusted-publish#readme",
+  "homepage": "https://github.com/johanna-herrmann/setup-npm-trusted-publish-pre-release#readme",
   "engines": {
     "node": ">=20.0.0"
   },

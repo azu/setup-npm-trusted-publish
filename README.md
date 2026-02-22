@@ -2,7 +2,7 @@
 
 This is a fork of [setup-npm-trusted-publish](https://www.npmjs.com/package/setup-npm-trusted-publish)
 from azu <azuciao@gmail.com>,
-but using `0.0.0-dummy` as version, instead of `0.0.0`.
+but using `0.0.0-dummy` as version, instead of `0.0.1`.
 
 [LICENSE OF setup-npm-trusted-publish](./LICENSE_source.txt)
 
