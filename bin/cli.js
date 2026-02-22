@@ -91,7 +91,7 @@ try {
   // Create package.json
   const packageJson = {
     name: packageName,
-    version: '0.0.1',
+    version: '0.0.0-dummy',
     description: `OIDC trusted publishing setup package for ${packageName}`,
     keywords: ['oidc', 'trusted-publishing', 'setup']
   };
