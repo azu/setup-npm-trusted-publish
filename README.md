@@ -1,4 +1,16 @@
-# setup-npm-trusted-publish
+# setup-npm-trusted-publish-pre-release
+
+This is a fork of [setup-npm-trusted-publish](https://www.npmjs.com/package/setup-npm-trusted-publish)
+from azu <azuciao@gmail.com>,
+but using `0.0.0-dummy` as version, instead of `0.0.0`.
+
+[LICENSE OF setup-npm-trusted-publish](./LICENSE_source.txt)
+
+[LICENSE OF setup-npm-trusted-publish-pre-release](./LICENSE.txt)
+
+-----
+
+Following the README of `setup-npm-trusted-publish`@`1.0.3`
 
 A tool to create and publish placeholder npm packages for setting up OIDC (OpenID Connect) trusted publishing.
 
