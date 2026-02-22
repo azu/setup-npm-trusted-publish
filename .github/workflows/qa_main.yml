@@ -1,0 +1,26 @@
+name: QA-Main
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  qa:
+    name: Run QA
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run QA
+        run: npm run qa

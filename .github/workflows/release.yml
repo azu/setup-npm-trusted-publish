@@ -1,147 +1,70 @@
-name: Release
+name: QA and Release
 
 on:
-  pull_request:
+  push:
     branches:
-      - master
-      - main
-    types:
-      - closed
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to publish (e.g., 1.2.3)'
-        required: false
-        type: string
+      - 'main'
+    tags-ignore:
+      - '**'
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
-  release:
-    if: |
-      (github.event_name == 'pull_request' && 
-       github.event.pull_request.merged == true &&
-       contains(github.event.pull_request.labels.*.name, 'Type: Release')) ||
-      github.event_name == 'workflow_dispatch'
+  publish:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write  # OIDC
-      pull-requests: write  # PR comment
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          persist-credentials: false
-      
-      - name: Get package info
-        id: package
-        run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_VERSION" ]; then
-            VERSION="$INPUT_VERSION"
-          else
-            VERSION=$(jq -r '.version' package.json)
-          fi
-          PACKAGE_NAME=$(jq -r '.name' package.json)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_VERSION: ${{ github.event.inputs.version }}
-      
-      - name: Check if tag exists
-        id: tag-check
-        run: |
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-        env:
-          VERSION: ${{ steps.package.outputs.version }}
-      
-      - name: Setup Node.js
-        if: steps.tag-check.outputs.exists == 'false'
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+          fetch-depth: 0
+
+      - name: Setup Node.js with required version for OIDC
+        uses: actions/setup-node@v4
         with:
-          node-version: 'lts/*'
+          # Trusted publishing requires npm CLI version 11.5.1 or later and Node version 22.14.0 or higher
+          node-version: '22.14.0'
           registry-url: 'https://registry.npmjs.org'
-      
-      - name: Install latest npm
-        if: steps.tag-check.outputs.exists == 'false'
-        run: |
-          echo "Current npm version: $(npm -v)"
-          npm install -g npm@latest
-          echo "Updated npm version: $(npm -v)"
-      
+
+      - name: install required npm version for OIDC
+        # Trusted publishing requires npm CLI version 11.5.1 or later and Node version 22.14.0 or higher
+        run: npm install -g npm@11.5.1
+
       - name: Install dependencies
-        if: steps.tag-check.outputs.exists == 'false'
-        run: npm ci
-      
-      - name: Publish to npm with provenance
-        if: steps.tag-check.outputs.exists == 'false'
-        run: npm publish --provenance --access public
-      
-      - name: Create GitHub Release with tag
-        id: create-release
-        if: steps.tag-check.outputs.exists == 'false'
+        run: npm install
+
+      - name: QA
+        run: npm run qa
+
+      - name: Build project
+        run: npm run build
+
+      - name: determine next version
+        id: get_next_version
+        uses: thenativeweb/get-next-version@2.7.1
+        with:
+          prefix: 'v'
+
+      - name: fail if no next release version
+        if: ${{ steps.get_next_version.outputs.hasNextVersion != 'true' }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            RELEASE_URL=$(gh release create "v$VERSION" \
-              --title "v$VERSION" \
-              --target "$SHA" \
-              --generate-notes)
-          else
-            RELEASE_URL=$(gh release create "v$VERSION" \
-              --title "v$VERSION" \
-              --target "$SHA" \
-              --notes "$PR_BODY")
-          fi
-          echo "url=$RELEASE_URL" >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.package.outputs.version }}
-          SHA: ${{ github.sha }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-      
-      - name: Comment on PR - Success
-        if: |
-          always() && 
-          github.event_name == 'pull_request' && 
-          steps.tag-check.outputs.exists == 'false' &&
-          success()
+          echo "There is no next release version. hasNextVersion is false"
+          exit 1
+
+      - name: Check if version-release is set up correctly
+        uses: johanna-herrmann/node-check-version@v1
+        with:
+          next_version: ${{ steps.get_next_version.outputs.version }}
+
+      - name: Publish
+        #provenance flag sometimes required, due to a bug?
+        #https://philna.sh/blog/2026/01/28/trusted-publishing-npm/
+        run: npm publish --provenance
+
+      - name: Tag release commit
         run: |
-          gh pr comment "$PR_NUMBER" \
-            --body "✅ **Release v$VERSION completed successfully!**
-          
-          - 📦 npm package: https://www.npmjs.com/package/$PACKAGE_NAME/v/$VERSION
-          - 🏷️ GitHub Release: $RELEASE_URL
-          - 🔗 Workflow run: $SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID"
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          VERSION: ${{ steps.package.outputs.version }}
-          PACKAGE_NAME: ${{ steps.package.outputs.name }}
-          RELEASE_URL: ${{ steps.create-release.outputs.url }}
-          SERVER_URL: ${{ github.server_url }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-      
-      - name: Comment on PR - Failure
-        if: |
-          always() && 
-          github.event_name == 'pull_request' && 
-          steps.tag-check.outputs.exists == 'false' &&
-          failure()
-        run: |
-          gh pr comment "$PR_NUMBER" \
-            --body "❌ **Release v$VERSION failed**
-          
-          Please check the workflow logs for details.
-          🔗 Workflow run: $SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID"
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          VERSION: ${{ steps.package.outputs.version }}
-          SERVER_URL: ${{ github.server_url }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
+          NEXT_VERSION=${{ steps.get_next_version.outputs.version }}
+          git tag $NEXT_VERSION
+          git push origin $NEXT_VERSION
