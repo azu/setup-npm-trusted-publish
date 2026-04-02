@@ -6,7 +6,10 @@ A tool to create and publish placeholder npm packages for setting up OIDC (OpenI
 
 Unlike PyPI which allows configuring OIDC for not-yet-existing packages, npm requires a package to exist before you can configure trusted publishing. This tool helps work around that limitation by automatically creating and publishing minimal placeholder packages that clearly indicate they exist solely for OIDC setup purposes.
 
-See: [GitHub Community Discussion #127011](https://github.com/orgs/community/discussions/127011)
+See: 
+
+- [GitHub Community Discussion #127011](https://github.com/orgs/community/discussions/127011)
+- [Allow publishing initial version with OIDC · Issue #8544 · npm/cli](https://github.com/npm/cli/issues/8544)
 
 ## Installation
 
