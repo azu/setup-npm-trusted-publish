@@ -187,7 +187,8 @@ For more details about npm's trusted publishing feature, see:
     try {
       execFileSync('npm', publishArgs, {
         cwd: packageDir,
-        stdio: 'inherit'
+        stdio: 'inherit',
+        shell: true
       });
       
       console.log(`\n✅ Successfully published: ${packageName}`);
