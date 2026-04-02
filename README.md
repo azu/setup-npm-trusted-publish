@@ -48,6 +48,20 @@ setup-npm-trusted-publish my-package --dry-run
 read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
 ```
 
+## Usage without local npm login
+
+If you don't have npm login configured locally, you can use a one-time Granular Access Token:
+
+1. Go to https://www.npmjs.com/settings/{user}/tokens and create a new **Granular Access Token**
+2. Configure the token:
+   - **Packages and scopes**: Read and write (select the target scope if publishing a scoped package)
+   - **Expiration**: 7 days (shortest available, since this is one-time use)
+3. Publish using the token:
+   ```bash
+   read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish @myorg/my-package
+   ```
+4. Revoke the token at https://www.npmjs.com/settings/{user}/tokens after publishing
+
 ## What it does
 
 This tool:
