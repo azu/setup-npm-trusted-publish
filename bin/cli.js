@@ -49,6 +49,9 @@ Example:
   setup-npm-trusted-publish my-package
   setup-npm-trusted-publish @scope/my-package
 
+Environment:
+  NPM_TOKEN        npm auth token for publishing (optional, uses .npmrc in package dir)
+
 Note:
   This tool creates and publishes a placeholder package for OIDC setup.
   The package contains only a README.md that clearly indicates it's for
@@ -150,6 +153,16 @@ For more details about npm's trusted publishing feature, see:
 `;
 
   await writeFile(join(packageDir, 'README.md'), readmeContent);
+
+  // If NPM_TOKEN is set, create .npmrc for authentication
+  const npmToken = process.env.NPM_TOKEN;
+  if (npmToken) {
+    await writeFile(
+      join(packageDir, '.npmrc'),
+      '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n'
+    );
+    console.log(`🔑 Using NPM_TOKEN for authentication`);
+  }
 
   console.log(`✅ Created placeholder package files`);
 
