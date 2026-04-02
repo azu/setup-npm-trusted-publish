@@ -2,7 +2,7 @@
 import { parseArgs } from 'node:util';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 
@@ -176,12 +176,16 @@ For more details about npm's trusted publishing feature, see:
     // Publish the package
     console.log(`\n📤 Publishing package to npm...`);
     
-    const publishCmd = packageName.startsWith('@') 
-      ? `npm publish --access ${values.access}`
-      : 'npm publish';
-    
+    const publishArgs = ['publish'];
+    if (packageName.startsWith('@')) {
+      publishArgs.push('--access', values.access);
+    }
+    if (npmToken) {
+      publishArgs.push('--userconfig', join(packageDir, '.npmrc'));
+    }
+
     try {
-      execSync(publishCmd, {
+      execFileSync('npm', publishArgs, {
         cwd: packageDir,
         stdio: 'inherit'
       });
