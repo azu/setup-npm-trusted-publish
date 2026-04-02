@@ -2,7 +2,7 @@
 import { parseArgs } from 'node:util';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 
@@ -48,6 +48,9 @@ Options:
 Example:
   setup-npm-trusted-publish my-package
   setup-npm-trusted-publish @scope/my-package
+
+Environment:
+  NPM_TOKEN        npm auth token for publishing (optional, uses .npmrc in package dir)
 
 Note:
   This tool creates and publishes a placeholder package for OIDC setup.
@@ -151,6 +154,16 @@ For more details about npm's trusted publishing feature, see:
 
   await writeFile(join(packageDir, 'README.md'), readmeContent);
 
+  // If NPM_TOKEN is set, create .npmrc for authentication
+  const npmToken = process.env.NPM_TOKEN;
+  if (npmToken) {
+    await writeFile(
+      join(packageDir, '.npmrc'),
+      '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n'
+    );
+    console.log(`🔑 Using NPM_TOKEN for authentication`);
+  }
+
   console.log(`✅ Created placeholder package files`);
 
   if (values['dry-run']) {
@@ -163,14 +176,19 @@ For more details about npm's trusted publishing feature, see:
     // Publish the package
     console.log(`\n📤 Publishing package to npm...`);
     
-    const publishCmd = packageName.startsWith('@') 
-      ? `npm publish --access ${values.access}`
-      : 'npm publish';
-    
+    const publishArgs = ['publish'];
+    if (packageName.startsWith('@')) {
+      publishArgs.push('--access', values.access);
+    }
+    if (npmToken) {
+      publishArgs.push('--userconfig', join(packageDir, '.npmrc'));
+    }
+
     try {
-      execSync(publishCmd, {
+      execFileSync('npm', publishArgs, {
         cwd: packageDir,
-        stdio: 'inherit'
+        stdio: 'inherit',
+        shell: true
       });
       
       console.log(`\n✅ Successfully published: ${packageName}`);
