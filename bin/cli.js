@@ -25,6 +25,10 @@ const { values, positionals } = parseArgs({
     access: {
       type: 'string',
       default: 'public'
+    },
+    registry: {
+      type: 'string',
+      default: 'https://registry.npmjs.org'
     }
   },
   allowPositionals: true
@@ -44,6 +48,7 @@ Options:
   -v, --version   Show version
   --dry-run       Create the package but don't publish
   --access        Access level for scoped packages (public/restricted) [default: public]
+  --registry      npm registry URL [default: https://registry.npmjs.org]
 
 Example:
   setup-npm-trusted-publish my-package
@@ -157,9 +162,10 @@ For more details about npm's trusted publishing feature, see:
   // If NPM_TOKEN is set, create .npmrc for authentication
   const npmToken = process.env.NPM_TOKEN;
   if (npmToken) {
+    const registryUrl = new URL(values.registry);
     await writeFile(
       join(packageDir, '.npmrc'),
-      '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n'
+      `registry=${values.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
     );
     console.log(`🔑 Using NPM_TOKEN for authentication`);
   }
@@ -171,12 +177,12 @@ For more details about npm's trusted publishing feature, see:
     console.log(`📁 Package location: ${packageDir}`);
     console.log(`\nTo publish manually:`);
     console.log(`  cd ${packageDir}`);
-    console.log(`  npm publish${packageName.startsWith('@') ? ' --access ' + values.access : ''}`);
+    console.log(`  npm publish --registry ${values.registry}${packageName.startsWith('@') ? ' --access ' + values.access : ''}`);
   } else {
     // Publish the package
     console.log(`\n📤 Publishing package to npm...`);
     
-    const publishArgs = ['publish'];
+    const publishArgs = ['publish', '--registry', values.registry];
     if (packageName.startsWith('@')) {
       publishArgs.push('--access', values.access);
     }
@@ -203,7 +209,7 @@ For more details about npm's trusted publishing feature, see:
       console.log(`\n📁 Package files are still available at: ${packageDir}`);
       console.log(`You can try publishing manually:`);
       console.log(`  cd ${packageDir}`);
-      console.log(`  npm publish${packageName.startsWith('@') ? ' --access ' + values.access : ''}`);
+      console.log(`  npm publish --registry ${values.registry}${packageName.startsWith('@') ? ' --access ' + values.access : ''}`);
       process.exit(1);
     }
   }
