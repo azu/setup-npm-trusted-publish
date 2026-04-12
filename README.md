@@ -32,6 +32,7 @@ setup-npm-trusted-publish <package-name>
 Options:
 - `--dry-run` - Create the package but don't publish
 - `--access <public|restricted>` - Access level for scoped packages (default: public)
+- `--registry <url>` - npm registry URL (default: `https://registry.npmjs.org`)
 
 Environment Variables:
 - `NPM_TOKEN` - npm authentication token for users who don't have npm login configured locally. If set, a temporary `.npmrc` is created in the package directory with `//registry.npmjs.org/:_authToken=${NPM_TOKEN}`. npm expands `${NPM_TOKEN}` at runtime, so the actual token is never written to disk. The `.npmrc` is cleaned up with the temporary directory after publishing.
