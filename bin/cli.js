@@ -163,8 +163,7 @@ function setMfa(pkgName, opts) {
   accessArgs.push('--registry', opts.registry);
   try {
     execFileSync('npm', accessArgs, {
-      stdio: 'inherit',
-      shell: true
+      stdio: 'inherit'
     });
     console.log(`✅ MFA requirement set to "${opts.mfa}"`);
   } catch (mfaError) {
@@ -246,8 +245,7 @@ function buildTrustArgs(provider) {
 function packageExists(pkgName, registry) {
   try {
     execFileSync('npm', ['view', pkgName, 'name', '--registry', registry], {
-      stdio: 'pipe',
-      shell: true
+      stdio: 'pipe'
     });
     return true;
   } catch {
@@ -359,8 +357,7 @@ For more details about npm's trusted publishing feature, see:
 
     execFileSync('npm', publishArgs, {
       cwd: pkgDir,
-      stdio: 'inherit',
-      shell: true
+      stdio: 'inherit'
     });
 
     console.log(`\n✅ Successfully published: ${pkgName}`);
@@ -380,7 +377,7 @@ const provider = detectProvider();
 
 if (provider) {
   // Check npm version >= 11.10.0
-  const npmVersionStr = execFileSync('npm', ['--version'], { encoding: 'utf-8', shell: true }).trim();
+  const npmVersionStr = execFileSync('npm', ['--version'], { encoding: 'utf-8' }).trim();
   const npmVersionParts = npmVersionStr.split('.').map(Number);
   const npmVersionNum = npmVersionParts[0] * 10000 + npmVersionParts[1] * 100 + npmVersionParts[2];
   const requiredVersionNum = 11 * 10000 + 10 * 100 + 0;
@@ -414,18 +411,41 @@ if (provider) {
 
   const trustArgs = buildTrustArgs(provider);
 
+  // Create temporary .npmrc for NPM_TOKEN authentication
+  const npmToken = process.env.NPM_TOKEN;
+  let trustUserconfig;
+  let trustTempDir;
+  if (npmToken) {
+    trustTempDir = join(tmpdir(), `npm-trust-${randomBytes(8).toString('hex')}`);
+    await mkdir(trustTempDir, { recursive: true });
+    const registryUrl = new URL(values.registry);
+    const npmrcPath = join(trustTempDir, '.npmrc');
+    await writeFile(
+      npmrcPath,
+      `registry=${values.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
+    );
+    trustUserconfig = npmrcPath;
+    trustArgs.push('--userconfig', npmrcPath);
+    console.log(`🔑 Using NPM_TOKEN for authentication`);
+  }
+
   console.log(`📦 Configuring trusted publishing for: ${packageName} (${provider})`);
 
   try {
     execFileSync('npm', trustArgs, {
-      stdio: 'inherit',
-      shell: true
+      stdio: 'inherit'
     });
     console.log(`\n✅ Successfully configured trusted publishing for: ${packageName}`);
   } catch (trustError) {
     console.error(`\n❌ Failed to configure trusted publishing`);
     console.error(`Error: ${trustError.message}`);
     process.exit(1);
+  } finally {
+    if (trustTempDir) {
+      try {
+        await rm(trustTempDir, { recursive: true, force: true });
+      } catch {}
+    }
   }
 
   // Set MFA requirement if specified
