@@ -413,8 +413,8 @@ if (provider) {
 
   // Create temporary .npmrc for NPM_TOKEN authentication
   const npmToken = process.env.NPM_TOKEN;
-  let trustUserconfig;
   let trustTempDir;
+  const trustEnv = { ...process.env };
   if (npmToken) {
     trustTempDir = join(tmpdir(), `npm-trust-${randomBytes(8).toString('hex')}`);
     await mkdir(trustTempDir, { recursive: true });
@@ -424,8 +424,7 @@ if (provider) {
       npmrcPath,
       `registry=${values.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
     );
-    trustUserconfig = npmrcPath;
-    trustArgs.push('--userconfig', npmrcPath);
+    trustEnv.npm_config_userconfig = npmrcPath;
     console.log(`🔑 Using NPM_TOKEN for authentication`);
   }
 
@@ -433,7 +432,8 @@ if (provider) {
 
   try {
     execFileSync('npm', trustArgs, {
-      stdio: 'inherit'
+      stdio: 'inherit',
+      env: trustEnv
     });
     console.log(`\n✅ Successfully configured trusted publishing for: ${packageName}`);
   } catch (trustError) {
