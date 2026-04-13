@@ -35,13 +35,7 @@ Authentication: When `NPM_TOKEN` env var is set, creates a temporary `.npmrc` an
 
 ## Registry
 
-ユーザーの `~/.npmrc` でカスタムレジストリが設定されている場合がある。全ての `npm` コマンド（`view`, `publish`, `trust`, `access`）に `--registry` を明示的に渡すこと。`npm trust` は `--userconfig` フラグを受け付けないため、`npm_config_userconfig` 環境変数で一時 `.npmrc` のパスを渡す。
-
-## NPM_TOKEN の取り扱い
-
-- `NPM_TOKEN` はログ出力やエラーメッセージに含めない
-- PRタイトル・コミットメッセージにトークンを含めない
-- 一時 `.npmrc` でのみ使用し、処理後に削除する
+User's `~/.npmrc` may set a custom registry. All npm commands (`view`, `publish`, `trust`, `access`) must explicitly pass `--registry`. `npm trust` does not accept the `--userconfig` flag, so pass the temporary `.npmrc` path via `npm_config_userconfig` environment variable instead.
 
 ## npm MFA values (counterintuitive)
 
