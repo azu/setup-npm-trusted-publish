@@ -33,6 +33,16 @@ All logic is in `bin/cli.js` (~500 lines). Key functions:
 
 Authentication: When `NPM_TOKEN` env var is set, creates a temporary `.npmrc` and passes it via `npm_config_userconfig` environment variable (not `--userconfig` flag, which `npm trust` doesn't support).
 
+## Registry
+
+ユーザーの `~/.npmrc` でカスタムレジストリが設定されている場合がある。全ての `npm` コマンド（`view`, `publish`, `trust`, `access`）に `--registry` を明示的に渡すこと。`npm trust` は `--userconfig` フラグを受け付けないため、`npm_config_userconfig` 環境変数で一時 `.npmrc` のパスを渡す。
+
+## NPM_TOKEN の取り扱い
+
+- `NPM_TOKEN` はログ出力やエラーメッセージに含めない
+- PRタイトル・コミットメッセージにトークンを含めない
+- 一時 `.npmrc` でのみ使用し、処理後に削除する
+
 ## npm MFA values (counterintuitive)
 
 - `mfa=automation` — 2FA required OR granular access token with bypass 2FA (for CI/CD)
