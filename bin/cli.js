@@ -161,9 +161,14 @@ function setMfa(pkgName, opts) {
     accessArgs.push('--otp', opts.otp);
   }
   accessArgs.push('--registry', opts.registry);
+  const mfaEnv = { ...process.env };
+  if (opts.npmrcPath) {
+    mfaEnv.npm_config_userconfig = opts.npmrcPath;
+  }
   try {
     execFileSync('npm', accessArgs, {
-      stdio: 'inherit'
+      stdio: 'inherit',
+      env: mfaEnv
     });
     console.log(`✅ MFA requirement set to "${opts.mfa}"`);
   } catch (mfaError) {
@@ -414,17 +419,18 @@ if (provider) {
   // Create temporary .npmrc for NPM_TOKEN authentication
   const npmToken = process.env.NPM_TOKEN;
   let trustTempDir;
+  let trustNpmrcPath;
   const trustEnv = { ...process.env };
   if (npmToken) {
     trustTempDir = join(tmpdir(), `npm-trust-${randomBytes(8).toString('hex')}`);
     await mkdir(trustTempDir, { recursive: true });
     const registryUrl = new URL(values.registry);
-    const npmrcPath = join(trustTempDir, '.npmrc');
+    trustNpmrcPath = join(trustTempDir, '.npmrc');
     await writeFile(
-      npmrcPath,
+      trustNpmrcPath,
       `registry=${values.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
     );
-    trustEnv.npm_config_userconfig = npmrcPath;
+    trustEnv.npm_config_userconfig = trustNpmrcPath;
     console.log(`🔑 Using NPM_TOKEN for authentication`);
   }
 
@@ -440,17 +446,18 @@ if (provider) {
     console.error(`\n❌ Failed to configure trusted publishing`);
     console.error(`Error: ${trustError.message}`);
     process.exit(1);
-  } finally {
-    if (trustTempDir) {
-      try {
-        await rm(trustTempDir, { recursive: true, force: true });
-      } catch {}
-    }
   }
 
   // Set MFA requirement if specified
   if (values.mfa && !values['dry-run']) {
-    setMfa(packageName, values);
+    setMfa(packageName, { ...values, npmrcPath: trustNpmrcPath });
+  }
+
+  // Clean up temporary .npmrc
+  if (trustTempDir) {
+    try {
+      await rm(trustTempDir, { recursive: true, force: true });
+    } catch {}
   }
 
   process.exit(0);
