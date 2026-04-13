@@ -1,10 +1,15 @@
 # setup-npm-trusted-publish
 
-A tool to create and publish placeholder npm packages for setting up OIDC (OpenID Connect) trusted publishing.
+A tool to setup OIDC (OpenID Connect) trusted publishing for npm packages.
+
+When `--github.*`, `--gitlab.*`, or `--circleci.*` options are specified, configures trusted publishing directly via [`npm trust`](https://docs.npmjs.com/cli/v11/commands/npm-trust) (requires npm >= 11.10.0). Otherwise, publishes a minimal placeholder package so you can configure OIDC manually on npmjs.com.
 
 ## Background
 
-Unlike PyPI which allows configuring OIDC for not-yet-existing packages, npm requires a package to exist before you can configure trusted publishing. This tool helps work around that limitation by automatically creating and publishing minimal placeholder packages that clearly indicate they exist solely for OIDC setup purposes.
+Unlike PyPI which allows configuring OIDC for not-yet-existing packages, npm requires a package to exist before you can configure trusted publishing. This tool helps work around that limitation in two ways:
+
+1. Via `npm trust` (npm >= 11.10.0): Configures trusted publishing directly without publishing a placeholder
+2. Via placeholder publish (npm < 11.10.0): Creates and publishes a minimal placeholder package
 
 See: 
 
@@ -35,41 +40,43 @@ Options:
 - `--registry <url>` - npm registry URL (default: `https://registry.npmjs.org`)
 - `--mfa <none|publish|automation>` - Set publishing MFA requirement. `publish`: require 2FA or granular token with bypass 2FA. `automation`: require 2FA and disallow tokens (recommended)
 - `--otp <code>` - One-time password for 2FA
-- `--env <environment>` - CI environment name for `npm trust` mode (optional, shared across providers)
-- `--github.repo <owner/repo>` - GitHub repository. Enables `npm trust` mode (requires npm >= 11.10.0)
-- `--github.file <workflow.yml>` - Workflow file name for GitHub Actions
-- `--gitlab.repo <owner/repo>` - GitLab project. Enables `npm trust` mode
-- `--gitlab.file <pipeline.yml>` - Pipeline file name for GitLab CI/CD
-- `--circleci.org-id <uuid>` - CircleCI organization ID. Enables `npm trust` mode
-- `--circleci.project-id <uuid>` - CircleCI project ID
-- `--circleci.pipeline-definition-id <uuid>` - CircleCI pipeline definition ID
-- `--circleci.vcs-origin <origin>` - CircleCI VCS origin
-- `--circleci.context-id <uuid>` - CircleCI context ID (optional)
+Trusted Publisher configuration via `npm trust` (requires npm >= 11.10.0):
+- `--github.repo <owner/repo>` - Repository that is allowed to publish
+- `--github.file <workflow.yml>` - Workflow file that triggers publishing
+- `--github.env <environment>` - Environment required for publishing (optional)
+- `--gitlab.repo <owner/repo>` - Project that is allowed to publish
+- `--gitlab.file <pipeline.yml>` - Pipeline file that triggers publishing
+- `--gitlab.env <environment>` - Environment required for publishing (optional)
+- `--circleci.org-id <uuid>` - Organization allowed to publish
+- `--circleci.project-id <uuid>` - Project allowed to publish
+- `--circleci.pipeline-definition-id <uuid>` - Pipeline that triggers publishing
+- `--circleci.vcs-origin <origin>` - VCS origin of the project
+- `--circleci.context-id <uuid>` - Context required for publishing (optional)
 
 Environment Variables:
 - `NPM_TOKEN` - npm authentication token for users who don't have npm login configured locally. If set, a temporary `.npmrc` is created in the package directory with `//registry.npmjs.org/:_authToken=${NPM_TOKEN}`. npm expands `${NPM_TOKEN}` at runtime, so the actual token is never written to disk. The `.npmrc` is cleaned up with the temporary directory after publishing.
 
 Examples:
 ```bash
-# Create and publish a regular package
+# Via "npm trust" (npm >= 11.10.0)
+setup-npm-trusted-publish my-package --github.repo owner/repo --github.file release.yml --mfa automation
+setup-npm-trusted-publish @myorg/my-package \
+  --github.repo myorg/my-repo --github.file release.yml \
+  --github.env npm --mfa automation
+setup-npm-trusted-publish @myorg/my-package \
+  --gitlab.repo myorg/my-repo --gitlab.file .gitlab-ci.yml --mfa automation
+setup-npm-trusted-publish my-package \
+  --circleci.org-id <uuid> --circleci.project-id <uuid> \
+  --circleci.pipeline-definition-id <uuid> --circleci.vcs-origin <origin>
+
+# Via placeholder publish (npm < 11.10.0)
 setup-npm-trusted-publish my-package
-
-# Create and publish a scoped package
-setup-npm-trusted-publish @myorg/my-package
-
-# Dry run (create but don't publish)
-setup-npm-trusted-publish my-package --dry-run
-
-# Use a one-time token without configuring npm login locally
+setup-npm-trusted-publish @myorg/my-package --mfa automation
 read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
 
-# npm trust mode (npm >= 11.10.0) - no placeholder package needed
-# GitHub Actions
-setup-npm-trusted-publish @myorg/my-package --github.repo myorg/my-repo --github.file release.yml
-setup-npm-trusted-publish @myorg/my-package --github.repo myorg/my-repo --github.file release.yml --env npm
-
-# GitLab CI/CD
-setup-npm-trusted-publish @myorg/my-package --gitlab.repo myorg/my-repo --gitlab.file .gitlab-ci.yml
+# Other options
+setup-npm-trusted-publish my-package --github.repo owner/repo --github.file release.yml --dry-run
+setup-npm-trusted-publish my-package --registry https://npm.example.com
 ```
 
 ## Usage without local npm login
@@ -88,17 +95,17 @@ If you don't have npm login configured locally, you can use a one-time Granular 
 
 ## What it does
 
-### npm trust mode (npm >= 11.10.0)
+### Via `npm trust` (npm >= 11.10.0)
 
-When provider-specific options (`--github.*`, `--gitlab.*`, `--circleci.*`) are specified, this tool uses [`npm trust`](https://docs.npmjs.com/cli/v11/commands/npm-trust) to configure trusted publishing directly. No placeholder package is published.
+When `--github.*`, `--gitlab.*`, or `--circleci.*` options are specified, this tool runs [`npm trust`](https://docs.npmjs.com/cli/v11/commands/npm-trust) to configure trusted publishing directly. No placeholder package is published.
 
 ```bash
 setup-npm-trusted-publish @myorg/my-package --github.repo myorg/my-repo --github.file release.yml
 ```
 
-### Placeholder publish mode (legacy)
+### Via placeholder publish (npm < 11.10.0)
 
-Without `--repo`/`--file`, this tool:
+Without `--github.*` / `--gitlab.*` / `--circleci.*` options, this tool:
 1. Creates a minimal npm package in a temporary directory
 2. Generates a `package.json` with basic metadata for OIDC setup
 3. Creates a `README.md` that **clearly states the package is for OIDC setup only**

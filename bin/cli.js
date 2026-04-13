@@ -31,15 +31,16 @@ const { values, positionals } = parseArgs({
       default: 'https://registry.npmjs.org'
     },
     // Shared options
-    env: { type: 'string' },
     mfa: { type: 'string' },
     otp: { type: 'string' },
     // GitHub Actions
     'github.repo': { type: 'string' },
     'github.file': { type: 'string' },
+    'github.env': { type: 'string' },
     // GitLab CI/CD
     'gitlab.repo': { type: 'string' },
     'gitlab.file': { type: 'string' },
+    'gitlab.env': { type: 'string' },
     // CircleCI
     'circleci.org-id': { type: 'string' },
     'circleci.project-id': { type: 'string' },
@@ -52,63 +53,75 @@ const { values, positionals } = parseArgs({
 
 if (values.help) {
   console.log(`
-Usage: setup-npm-trusted-publish <package-name>
+Usage: setup-npm-trusted-publish <package-name> [options]
 
-Setup npm package for trusted publishing with OIDC by publishing a placeholder package
+Setup npm package for trusted publishing with OIDC.
+
+When --github.*, --gitlab.*, or --circleci.* options are specified, runs
+"npm trust" to configure trusted publishing directly (requires npm >= 11.10.0).
+Otherwise, publishes a minimal placeholder package so you can configure OIDC
+manually on npmjs.com.
 
 Arguments:
-  <package-name>  The name of the npm package to setup
+  <package-name>  The name of the npm package to setup (e.g. my-package, @scope/my-package)
 
 Options:
   -h, --help      Show help
   -v, --version   Show version
-  --dry-run       Create the package but don't publish
+  --dry-run       Preview actions without making changes
   --access        Access level for scoped packages (public/restricted) [default: public]
   --registry      npm registry URL [default: https://registry.npmjs.org]
-
-Publishing access:
-  --mfa             Set publishing MFA requirement (none/publish/automation)
+  --mfa           Set publishing MFA requirement after setup:
+                    none:       No MFA requirement
                     publish:    Require 2FA or granular access token with bypass 2FA enabled
                     automation: Require 2FA and disallow tokens (recommended)
-  --otp             One-time password for 2FA
+  --otp           One-time password for 2FA (optional, npm will prompt interactively if needed)
 
-npm trust mode (requires npm >= 11.10.0):
-  --env             CI environment name (shared across providers, optional)
+Trusted Publisher configuration via "npm trust" (requires npm >= 11.10.0):
+  Configure which CI workflow is allowed to publish this package.
 
   GitHub Actions:
-    --github.repo   GitHub repository (owner/repo)
-    --github.file   Workflow file name (e.g. release.yml)
+    --github.repo   Repository that is allowed to publish (owner/repo)
+    --github.file   Workflow file that triggers publishing (e.g. release.yml)
+    --github.env    Environment required for publishing (optional)
 
   GitLab CI/CD:
-    --gitlab.repo   GitLab project (owner/repo)
-    --gitlab.file   Pipeline file name (e.g. .gitlab-ci.yml)
+    --gitlab.repo   Project that is allowed to publish (owner/repo)
+    --gitlab.file   Pipeline file that triggers publishing (e.g. .gitlab-ci.yml)
+    --gitlab.env    Environment required for publishing (optional)
 
   CircleCI:
-    --circleci.org-id                 Organization ID (UUID)
-    --circleci.project-id             Project ID (UUID)
-    --circleci.pipeline-definition-id Pipeline definition ID (UUID)
-    --circleci.vcs-origin             VCS origin
-    --circleci.context-id             Context ID (UUID, optional)
+    --circleci.org-id                 Organization allowed to publish (UUID)
+    --circleci.project-id             Project allowed to publish (UUID)
+    --circleci.pipeline-definition-id Pipeline that triggers publishing (UUID)
+    --circleci.vcs-origin             VCS origin of the project
+    --circleci.context-id             Context required for publishing (UUID, optional)
 
-Example:
-  # Placeholder publish mode (legacy)
+Examples:
+  # Via "npm trust" (npm >= 11.10.0)
+  setup-npm-trusted-publish my-package --github.repo owner/repo --github.file release.yml
+  setup-npm-trusted-publish @scope/my-package \\
+    --github.repo owner/repo --github.file release.yml \\
+    --github.env npm --mfa automation
+  setup-npm-trusted-publish @scope/my-package \\
+    --gitlab.repo owner/repo --gitlab.file .gitlab-ci.yml --mfa automation
+  setup-npm-trusted-publish my-package \\
+    --circleci.org-id <uuid> --circleci.project-id <uuid> \\
+    --circleci.pipeline-definition-id <uuid> --circleci.vcs-origin <origin>
+
+  # Via placeholder publish (npm < 11.10.0)
   setup-npm-trusted-publish my-package
-  setup-npm-trusted-publish @scope/my-package
+  setup-npm-trusted-publish @scope/my-package --mfa automation
+  read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
 
-  # GitHub Actions
-  setup-npm-trusted-publish @scope/my-package --github.repo owner/repo --github.file release.yml
-  setup-npm-trusted-publish @scope/my-package --github.repo owner/repo --github.file release.yml --env npm
-
-  # GitLab CI/CD
-  setup-npm-trusted-publish @scope/my-package --gitlab.repo owner/repo --gitlab.file .gitlab-ci.yml
+  # Other options
+  setup-npm-trusted-publish my-package --github.repo owner/repo --github.file release.yml --dry-run
+  setup-npm-trusted-publish my-package --registry https://npm.example.com
 
 Environment:
-  NPM_TOKEN        npm auth token for publishing (optional, uses .npmrc in package dir)
-
-Note:
-  When provider-specific options (--github.*, --gitlab.*, --circleci.*) are specified,
-  this tool uses "npm trust" to configure trusted publishing directly without publishing
-  a placeholder package. Otherwise, it creates and publishes a placeholder package.
+  NPM_TOKEN   npm auth token for placeholder publish.
+              If set, creates a temporary .npmrc for authentication.
+              Not needed when using --github.* / --gitlab.* / --circleci.* options.
 `);
   process.exit(0);
 }
@@ -147,9 +160,7 @@ function setMfa(pkgName, opts) {
   if (opts.otp) {
     accessArgs.push('--otp', opts.otp);
   }
-  if (opts.registry !== 'https://registry.npmjs.org') {
-    accessArgs.push('--registry', opts.registry);
-  }
+  accessArgs.push('--registry', opts.registry);
   try {
     execFileSync('npm', accessArgs, {
       stdio: 'inherit',
@@ -187,12 +198,18 @@ function buildTrustArgs(provider) {
       process.exit(1);
     }
     args.push('--file', values['github.file'], '--repo', values['github.repo']);
+    if (values['github.env']) {
+      args.push('--env', values['github.env']);
+    }
   } else if (provider === 'gitlab') {
     if (!values['gitlab.repo'] || !values['gitlab.file']) {
       console.error('Error: --gitlab.repo and --gitlab.file are required for GitLab CI/CD');
       process.exit(1);
     }
     args.push('--file', values['gitlab.file'], '--repo', values['gitlab.repo']);
+    if (values['gitlab.env']) {
+      args.push('--env', values['gitlab.env']);
+    }
   } else if (provider === 'circleci') {
     const required = ['circleci.org-id', 'circleci.project-id', 'circleci.pipeline-definition-id', 'circleci.vcs-origin'];
     for (const key of required) {
@@ -212,15 +229,9 @@ function buildTrustArgs(provider) {
     }
   }
 
-  if (values.env) {
-    args.push('--env', values.env);
-  }
-
   args.push('--yes');
 
-  if (values.registry !== 'https://registry.npmjs.org') {
-    args.push('--registry', values.registry);
-  }
+  args.push('--registry', values.registry);
   if (values.otp) {
     args.push('--otp', values.otp);
   }
