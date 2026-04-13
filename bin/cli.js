@@ -73,8 +73,8 @@ Options:
   --registry      npm registry URL [default: https://registry.npmjs.org]
   --mfa           Set publishing MFA requirement after setup:
                     none:       No MFA requirement
-                    publish:    Require 2FA or granular access token with bypass 2FA enabled
-                    automation: Require 2FA and disallow tokens (recommended)
+                    automation: Require 2FA or granular access token with bypass 2FA enabled (for CI/CD)
+                    publish:    Require 2FA and disallow tokens (interactive publish only)
   --otp           One-time password for 2FA (optional, npm will prompt interactively if needed)
 
 Trusted Publisher configuration via "npm trust" (requires npm >= 11.10.0):
@@ -102,16 +102,16 @@ Examples:
   setup-npm-trusted-publish my-package --github.repo owner/repo --github.file release.yml
   setup-npm-trusted-publish @scope/my-package \\
     --github.repo owner/repo --github.file release.yml \\
-    --github.env npm --mfa automation
+    --github.env npm --mfa publish
   setup-npm-trusted-publish @scope/my-package \\
-    --gitlab.repo owner/repo --gitlab.file .gitlab-ci.yml --mfa automation
+    --gitlab.repo owner/repo --gitlab.file .gitlab-ci.yml --mfa publish
   setup-npm-trusted-publish my-package \\
     --circleci.org-id <uuid> --circleci.project-id <uuid> \\
     --circleci.pipeline-definition-id <uuid> --circleci.vcs-origin <origin>
 
   # Via placeholder publish (npm < 11.10.0)
   setup-npm-trusted-publish my-package
-  setup-npm-trusted-publish @scope/my-package --mfa automation
+  setup-npm-trusted-publish @scope/my-package --mfa publish
   read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
 
   # Other options

@@ -38,7 +38,7 @@ Options:
 - `--dry-run` - Create the package but don't publish
 - `--access <public|restricted>` - Access level for scoped packages (default: public)
 - `--registry <url>` - npm registry URL (default: `https://registry.npmjs.org`)
-- `--mfa <none|publish|automation>` - Set publishing MFA requirement. `publish`: require 2FA or granular token with bypass 2FA. `automation`: require 2FA and disallow tokens (recommended)
+- `--mfa <none|automation|publish>` - Set publishing MFA requirement. `automation`: require 2FA or granular access token with bypass 2FA enabled (for CI/CD). `publish`: require 2FA and disallow tokens (interactive publish only)
 - `--otp <code>` - One-time password for 2FA
 Trusted Publisher configuration via `npm trust` (requires npm >= 11.10.0):
 - `--github.repo <owner/repo>` - Repository that is allowed to publish
@@ -59,19 +59,19 @@ Environment Variables:
 Examples:
 ```bash
 # Via "npm trust" (npm >= 11.10.0)
-setup-npm-trusted-publish my-package --github.repo owner/repo --github.file release.yml --mfa automation
+setup-npm-trusted-publish my-package --github.repo owner/repo --github.file release.yml --mfa publish
 setup-npm-trusted-publish @myorg/my-package \
   --github.repo myorg/my-repo --github.file release.yml \
-  --github.env npm --mfa automation
+  --github.env npm --mfa publish
 setup-npm-trusted-publish @myorg/my-package \
-  --gitlab.repo myorg/my-repo --gitlab.file .gitlab-ci.yml --mfa automation
+  --gitlab.repo myorg/my-repo --gitlab.file .gitlab-ci.yml --mfa publish
 setup-npm-trusted-publish my-package \
   --circleci.org-id <uuid> --circleci.project-id <uuid> \
   --circleci.pipeline-definition-id <uuid> --circleci.vcs-origin <origin>
 
 # Via placeholder publish (npm < 11.10.0)
 setup-npm-trusted-publish my-package
-setup-npm-trusted-publish @myorg/my-package --mfa automation
+setup-npm-trusted-publish @myorg/my-package --mfa publish
 read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
 
 # Other options
