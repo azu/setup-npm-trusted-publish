@@ -460,6 +460,32 @@ if (provider) {
     } catch {}
   }
 
+  // Print summary
+  console.log(`\n--- Summary ---`);
+  console.log(`Package:  ${packageName}`);
+  console.log(`Provider: ${provider}`);
+  if (provider === 'github') {
+    console.log(`Repo:     ${values['github.repo']}`);
+    console.log(`File:     ${values['github.file']}`);
+    if (values['github.env']) {
+      console.log(`Env:      ${values['github.env']}`);
+    }
+  } else if (provider === 'gitlab') {
+    console.log(`Repo:     ${values['gitlab.repo']}`);
+    console.log(`File:     ${values['gitlab.file']}`);
+    if (values['gitlab.env']) {
+      console.log(`Env:      ${values['gitlab.env']}`);
+    }
+  } else if (provider === 'circleci') {
+    console.log(`Org ID:   ${values['circleci.org-id']}`);
+    console.log(`Project:  ${values['circleci.project-id']}`);
+  }
+  if (values.mfa) {
+    console.log(`MFA:      ${values.mfa}`);
+  }
+  console.log(`Registry: ${values.registry}`);
+  console.log(`URL:      https://www.npmjs.com/package/${packageName}`);
+
   process.exit(0);
 }
 
