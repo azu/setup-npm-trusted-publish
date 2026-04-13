@@ -29,7 +29,23 @@ const { values, positionals } = parseArgs({
     registry: {
       type: 'string',
       default: 'https://registry.npmjs.org'
-    }
+    },
+    // Shared options
+    env: { type: 'string' },
+    mfa: { type: 'string' },
+    otp: { type: 'string' },
+    // GitHub Actions
+    'github.repo': { type: 'string' },
+    'github.file': { type: 'string' },
+    // GitLab CI/CD
+    'gitlab.repo': { type: 'string' },
+    'gitlab.file': { type: 'string' },
+    // CircleCI
+    'circleci.org-id': { type: 'string' },
+    'circleci.project-id': { type: 'string' },
+    'circleci.pipeline-definition-id': { type: 'string' },
+    'circleci.vcs-origin': { type: 'string' },
+    'circleci.context-id': { type: 'string' }
   },
   allowPositionals: true
 });
@@ -50,17 +66,49 @@ Options:
   --access        Access level for scoped packages (public/restricted) [default: public]
   --registry      npm registry URL [default: https://registry.npmjs.org]
 
+Publishing access:
+  --mfa             Set publishing MFA requirement (none/publish/automation)
+                    publish:    Require 2FA or granular access token with bypass 2FA enabled
+                    automation: Require 2FA and disallow tokens (recommended)
+  --otp             One-time password for 2FA
+
+npm trust mode (requires npm >= 11.10.0):
+  --env             CI environment name (shared across providers, optional)
+
+  GitHub Actions:
+    --github.repo   GitHub repository (owner/repo)
+    --github.file   Workflow file name (e.g. release.yml)
+
+  GitLab CI/CD:
+    --gitlab.repo   GitLab project (owner/repo)
+    --gitlab.file   Pipeline file name (e.g. .gitlab-ci.yml)
+
+  CircleCI:
+    --circleci.org-id                 Organization ID (UUID)
+    --circleci.project-id             Project ID (UUID)
+    --circleci.pipeline-definition-id Pipeline definition ID (UUID)
+    --circleci.vcs-origin             VCS origin
+    --circleci.context-id             Context ID (UUID, optional)
+
 Example:
+  # Placeholder publish mode (legacy)
   setup-npm-trusted-publish my-package
   setup-npm-trusted-publish @scope/my-package
+
+  # GitHub Actions
+  setup-npm-trusted-publish @scope/my-package --github.repo owner/repo --github.file release.yml
+  setup-npm-trusted-publish @scope/my-package --github.repo owner/repo --github.file release.yml --env npm
+
+  # GitLab CI/CD
+  setup-npm-trusted-publish @scope/my-package --gitlab.repo owner/repo --gitlab.file .gitlab-ci.yml
 
 Environment:
   NPM_TOKEN        npm auth token for publishing (optional, uses .npmrc in package dir)
 
 Note:
-  This tool creates and publishes a placeholder package for OIDC setup.
-  The package contains only a README.md that clearly indicates it's for
-  OIDC configuration purposes only.
+  When provider-specific options (--github.*, --gitlab.*, --circleci.*) are specified,
+  this tool uses "npm trust" to configure trusted publishing directly without publishing
+  a placeholder package. Otherwise, it creates and publishes a placeholder package.
 `);
   process.exit(0);
 }
@@ -87,6 +135,142 @@ if (!validPackageNameRegex.test(packageName)) {
   process.exit(1);
 }
 
+// Validate --mfa value
+if (values.mfa && !['none', 'publish', 'automation'].includes(values.mfa)) {
+  console.error(`Error: --mfa must be one of: none, publish, automation (got: ${values.mfa})`);
+  process.exit(1);
+}
+
+function setMfa(pkgName, opts) {
+  console.log(`\n🔒 Setting MFA requirement to "${opts.mfa}" for: ${pkgName}`);
+  const accessArgs = ['access', 'set', `mfa=${opts.mfa}`, pkgName];
+  if (opts.otp) {
+    accessArgs.push('--otp', opts.otp);
+  }
+  if (opts.registry !== 'https://registry.npmjs.org') {
+    accessArgs.push('--registry', opts.registry);
+  }
+  try {
+    execFileSync('npm', accessArgs, {
+      stdio: 'inherit',
+      shell: true
+    });
+    console.log(`✅ MFA requirement set to "${opts.mfa}"`);
+  } catch (mfaError) {
+    console.error(`❌ Failed to set MFA requirement`);
+    console.error(`Error: ${mfaError.message}`);
+    console.error(`You can set it manually: npm access set mfa=${opts.mfa} ${pkgName}`);
+    process.exit(1);
+  }
+}
+
+// Detect npm trust mode by checking provider-specific flags
+function detectProvider() {
+  if (values['github.repo'] || values['github.file']) {
+    return 'github';
+  }
+  if (values['gitlab.repo'] || values['gitlab.file']) {
+    return 'gitlab';
+  }
+  if (values['circleci.org-id'] || values['circleci.project-id']) {
+    return 'circleci';
+  }
+  return null;
+}
+
+function buildTrustArgs(provider) {
+  const args = ['trust', provider, packageName];
+
+  if (provider === 'github') {
+    if (!values['github.repo'] || !values['github.file']) {
+      console.error('Error: --github.repo and --github.file are required for GitHub Actions');
+      process.exit(1);
+    }
+    args.push('--file', values['github.file'], '--repo', values['github.repo']);
+  } else if (provider === 'gitlab') {
+    if (!values['gitlab.repo'] || !values['gitlab.file']) {
+      console.error('Error: --gitlab.repo and --gitlab.file are required for GitLab CI/CD');
+      process.exit(1);
+    }
+    args.push('--file', values['gitlab.file'], '--repo', values['gitlab.repo']);
+  } else if (provider === 'circleci') {
+    const required = ['circleci.org-id', 'circleci.project-id', 'circleci.pipeline-definition-id', 'circleci.vcs-origin'];
+    for (const key of required) {
+      if (!values[key]) {
+        console.error(`Error: --${key} is required for CircleCI`);
+        process.exit(1);
+      }
+    }
+    args.push(
+      '--org-id', values['circleci.org-id'],
+      '--project-id', values['circleci.project-id'],
+      '--pipeline-definition-id', values['circleci.pipeline-definition-id'],
+      '--vcs-origin', values['circleci.vcs-origin']
+    );
+    if (values['circleci.context-id']) {
+      args.push('--context-id', values['circleci.context-id']);
+    }
+  }
+
+  if (values.env) {
+    args.push('--env', values.env);
+  }
+
+  args.push('--yes');
+
+  if (values.registry !== 'https://registry.npmjs.org') {
+    args.push('--registry', values.registry);
+  }
+  if (values.otp) {
+    args.push('--otp', values.otp);
+  }
+  if (values['dry-run']) {
+    args.push('--dry-run');
+  }
+
+  return args;
+}
+
+const provider = detectProvider();
+
+if (provider) {
+  // Check npm version >= 11.10.0
+  const npmVersionStr = execFileSync('npm', ['--version'], { encoding: 'utf-8', shell: true }).trim();
+  const npmVersionParts = npmVersionStr.split('.').map(Number);
+  const npmVersionNum = npmVersionParts[0] * 10000 + npmVersionParts[1] * 100 + npmVersionParts[2];
+  const requiredVersionNum = 11 * 10000 + 10 * 100 + 0;
+
+  if (npmVersionNum < requiredVersionNum) {
+    console.error(`Error: npm trust requires npm >= 11.10.0 (current: ${npmVersionStr})`);
+    console.error('Update npm with: npm install -g npm@latest');
+    process.exit(1);
+  }
+
+  const trustArgs = buildTrustArgs(provider);
+
+  console.log(`📦 Configuring trusted publishing for: ${packageName} (${provider})`);
+
+  try {
+    execFileSync('npm', trustArgs, {
+      stdio: 'inherit',
+      shell: true
+    });
+    console.log(`\n✅ Successfully configured trusted publishing for: ${packageName}`);
+  } catch (trustError) {
+    console.error(`\n❌ Failed to configure trusted publishing`);
+    console.error(`Error: ${trustError.message}`);
+    process.exit(1);
+  }
+
+  // Set MFA requirement if specified
+  if (values.mfa && !values['dry-run']) {
+    setMfa(packageName, values);
+  }
+
+  process.exit(0);
+}
+
+// Legacy mode: publish placeholder package
 // Create temp directory
 const tempDirName = `npm-oidc-setup-${randomBytes(8).toString('hex')}`;
 const packageDir = join(tmpdir(), tempDirName);
@@ -198,6 +382,12 @@ For more details about npm's trusted publishing feature, see:
       });
       
       console.log(`\n✅ Successfully published: ${packageName}`);
+
+      // Set MFA requirement if specified
+      if (values.mfa) {
+        setMfa(packageName, values);
+      }
+
       console.log(`\n🔗 View your package at: https://www.npmjs.com/package/${packageName}`);
       console.log(`\nNext steps:`);
       console.log(`1. Go to https://www.npmjs.com/package/${packageName}/access`);
