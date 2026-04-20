@@ -73,8 +73,8 @@ Options:
   --registry      npm registry URL [default: https://registry.npmjs.org]
   --mfa           Set publishing MFA requirement after setup:
                     none:       No MFA requirement
-                    publish:    Require 2FA or granular access token with bypass 2FA enabled
-                    automation: Require 2FA and disallow tokens (recommended)
+                    automation: Require 2FA or granular access token with bypass 2FA enabled (for CI/CD)
+                    publish:    Require 2FA and disallow tokens (interactive publish only)
   --otp           One-time password for 2FA (optional, npm will prompt interactively if needed)
 
 Trusted Publisher configuration via "npm trust" (requires npm >= 11.10.0):
@@ -102,16 +102,16 @@ Examples:
   setup-npm-trusted-publish my-package --github.repo owner/repo --github.file release.yml
   setup-npm-trusted-publish @scope/my-package \\
     --github.repo owner/repo --github.file release.yml \\
-    --github.env npm --mfa automation
+    --github.env npm --mfa publish
   setup-npm-trusted-publish @scope/my-package \\
-    --gitlab.repo owner/repo --gitlab.file .gitlab-ci.yml --mfa automation
+    --gitlab.repo owner/repo --gitlab.file .gitlab-ci.yml --mfa publish
   setup-npm-trusted-publish my-package \\
     --circleci.org-id <uuid> --circleci.project-id <uuid> \\
     --circleci.pipeline-definition-id <uuid> --circleci.vcs-origin <origin>
 
   # Via placeholder publish (npm < 11.10.0)
   setup-npm-trusted-publish my-package
-  setup-npm-trusted-publish @scope/my-package --mfa automation
+  setup-npm-trusted-publish @scope/my-package --mfa publish
   read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
 
   # Other options
@@ -161,10 +161,14 @@ function setMfa(pkgName, opts) {
     accessArgs.push('--otp', opts.otp);
   }
   accessArgs.push('--registry', opts.registry);
+  const mfaEnv = { ...process.env };
+  if (opts.npmrcPath) {
+    mfaEnv.npm_config_userconfig = opts.npmrcPath;
+  }
   try {
     execFileSync('npm', accessArgs, {
       stdio: 'inherit',
-      shell: true
+      env: mfaEnv
     });
     console.log(`✅ MFA requirement set to "${opts.mfa}"`);
   } catch (mfaError) {
@@ -242,70 +246,41 @@ function buildTrustArgs(provider) {
   return args;
 }
 
-const provider = detectProvider();
-
-if (provider) {
-  // Check npm version >= 11.10.0
-  const npmVersionStr = execFileSync('npm', ['--version'], { encoding: 'utf-8', shell: true }).trim();
-  const npmVersionParts = npmVersionStr.split('.').map(Number);
-  const npmVersionNum = npmVersionParts[0] * 10000 + npmVersionParts[1] * 100 + npmVersionParts[2];
-  const requiredVersionNum = 11 * 10000 + 10 * 100 + 0;
-
-  if (npmVersionNum < requiredVersionNum) {
-    console.error(`Error: npm trust requires npm >= 11.10.0 (current: ${npmVersionStr})`);
-    console.error('Update npm with: npm install -g npm@latest');
-    process.exit(1);
-  }
-
-  const trustArgs = buildTrustArgs(provider);
-
-  console.log(`📦 Configuring trusted publishing for: ${packageName} (${provider})`);
-
+// Check if package already exists on the registry
+function packageExists(pkgName, registry) {
   try {
-    execFileSync('npm', trustArgs, {
-      stdio: 'inherit',
-      shell: true
+    execFileSync('npm', ['view', pkgName, 'name', '--registry', registry], {
+      stdio: 'pipe'
     });
-    console.log(`\n✅ Successfully configured trusted publishing for: ${packageName}`);
-  } catch (trustError) {
-    console.error(`\n❌ Failed to configure trusted publishing`);
-    console.error(`Error: ${trustError.message}`);
-    process.exit(1);
+    return true;
+  } catch {
+    return false;
   }
-
-  // Set MFA requirement if specified
-  if (values.mfa && !values['dry-run']) {
-    setMfa(packageName, values);
-  }
-
-  process.exit(0);
 }
 
-// Legacy mode: publish placeholder package
-// Create temp directory
-const tempDirName = `npm-oidc-setup-${randomBytes(8).toString('hex')}`;
-const packageDir = join(tmpdir(), tempDirName);
-await mkdir(packageDir, { recursive: true });
+// Publish a placeholder package to reserve the name
+async function publishPlaceholder(pkgName, opts) {
+  const tempDirName = `npm-oidc-setup-${randomBytes(8).toString('hex')}`;
+  const pkgDir = join(tmpdir(), tempDirName);
+  await mkdir(pkgDir, { recursive: true });
 
-console.log(`📦 Creating placeholder package: ${packageName}`);
-console.log(`📁 Temp directory: ${packageDir}`);
+  console.log(`📦 Creating placeholder package: ${pkgName}`);
+  console.log(`📁 Temp directory: ${pkgDir}`);
 
-try {
-  // Create package.json
-  const packageJson = {
-    name: packageName,
-    version: '0.0.1',
-    description: `OIDC trusted publishing setup package for ${packageName}`,
-    keywords: ['oidc', 'trusted-publishing', 'setup']
-  };
+  try {
+    const packageJson = {
+      name: pkgName,
+      version: '0.0.1',
+      description: `OIDC trusted publishing setup package for ${pkgName}`,
+      keywords: ['oidc', 'trusted-publishing', 'setup']
+    };
 
-  await writeFile(
-    join(packageDir, 'package.json'),
-    JSON.stringify(packageJson, null, 2) + '\n'
-  );
+    await writeFile(
+      join(pkgDir, 'package.json'),
+      JSON.stringify(packageJson, null, 2) + '\n'
+    );
 
-  // Create README.md with clear indication
-  const readmeContent = `# ${packageName}
+    const readmeContent = `# ${pkgName}
 
 ## ⚠️ IMPORTANT NOTICE ⚠️
 
@@ -316,7 +291,7 @@ This is **NOT** a functional package and contains **NO** code or functionality b
 ## Purpose
 
 This package exists to:
-1. Configure OIDC trusted publishing for the package name \`${packageName}\`
+1. Configure OIDC trusted publishing for the package name \`${pkgName}\`
 2. Enable secure, token-less publishing from CI/CD workflows
 3. Establish provenance for packages published under this name
 
@@ -352,79 +327,190 @@ For more details about npm's trusted publishing feature, see:
 **Maintained for OIDC setup purposes only**
 `;
 
-  await writeFile(join(packageDir, 'README.md'), readmeContent);
+    await writeFile(join(pkgDir, 'README.md'), readmeContent);
 
-  // If NPM_TOKEN is set, create .npmrc for authentication
+    const npmToken = process.env.NPM_TOKEN;
+    if (npmToken) {
+      const registryUrl = new URL(opts.registry);
+      await writeFile(
+        join(pkgDir, '.npmrc'),
+        `registry=${opts.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
+      );
+      console.log(`🔑 Using NPM_TOKEN for authentication`);
+    }
+
+    console.log(`✅ Created placeholder package files`);
+
+    if (opts.dryRun) {
+      console.log(`\n🔍 Dry run mode - package created but not published`);
+      console.log(`📁 Package location: ${pkgDir}`);
+      console.log(`\nTo publish manually:`);
+      console.log(`  cd ${pkgDir}`);
+      console.log(`  npm publish --registry ${opts.registry}${pkgName.startsWith('@') ? ' --access ' + opts.access : ''}`);
+      return;
+    }
+
+    console.log(`\n📤 Publishing package to npm...`);
+
+    const publishArgs = ['publish', '--registry', opts.registry];
+    if (pkgName.startsWith('@')) {
+      publishArgs.push('--access', opts.access);
+    }
+    if (npmToken) {
+      publishArgs.push('--userconfig', join(pkgDir, '.npmrc'));
+    }
+
+    execFileSync('npm', publishArgs, {
+      cwd: pkgDir,
+      stdio: 'inherit'
+    });
+
+    console.log(`\n✅ Successfully published: ${pkgName}`);
+  } finally {
+    if (!opts.dryRun) {
+      try {
+        await rm(pkgDir, { recursive: true, force: true });
+        console.log(`\n🧹 Cleaned up temp directory`);
+      } catch (cleanupError) {
+        console.warn(`⚠️  Could not clean up temp directory: ${cleanupError.message}`);
+      }
+    }
+  }
+}
+
+const provider = detectProvider();
+
+if (provider) {
+  // Check npm version >= 11.10.0
+  const npmVersionStr = execFileSync('npm', ['--version'], { encoding: 'utf-8' }).trim();
+  const npmVersionParts = npmVersionStr.split('.').map(Number);
+  const npmVersionNum = npmVersionParts[0] * 10000 + npmVersionParts[1] * 100 + npmVersionParts[2];
+  const requiredVersionNum = 11 * 10000 + 10 * 100 + 0;
+
+  if (npmVersionNum < requiredVersionNum) {
+    console.error(`Error: npm trust requires npm >= 11.10.0 (current: ${npmVersionStr})`);
+    console.error('Update npm with: npm install -g npm@latest');
+    process.exit(1);
+  }
+
+  // Publish placeholder if package does not exist yet
+  if (!packageExists(packageName, values.registry)) {
+    console.log(`📦 Package "${packageName}" not found on registry. Publishing placeholder first...`);
+    try {
+      await publishPlaceholder(packageName, {
+        registry: values.registry,
+        access: values.access,
+        dryRun: values['dry-run']
+      });
+    } catch (publishError) {
+      console.error(`\n❌ Failed to publish placeholder package`);
+      console.error(`Error: ${publishError.message}`);
+      process.exit(1);
+    }
+
+    if (values['dry-run']) {
+      console.log(`\n🔍 Dry run mode - skipping npm trust configuration`);
+      process.exit(0);
+    }
+  }
+
+  const trustArgs = buildTrustArgs(provider);
+
+  // Create temporary .npmrc for NPM_TOKEN authentication
   const npmToken = process.env.NPM_TOKEN;
+  let trustTempDir;
+  let trustNpmrcPath;
+  const trustEnv = { ...process.env };
   if (npmToken) {
+    trustTempDir = join(tmpdir(), `npm-trust-${randomBytes(8).toString('hex')}`);
+    await mkdir(trustTempDir, { recursive: true });
     const registryUrl = new URL(values.registry);
+    trustNpmrcPath = join(trustTempDir, '.npmrc');
     await writeFile(
-      join(packageDir, '.npmrc'),
+      trustNpmrcPath,
       `registry=${values.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
     );
+    trustEnv.npm_config_userconfig = trustNpmrcPath;
     console.log(`🔑 Using NPM_TOKEN for authentication`);
   }
 
-  console.log(`✅ Created placeholder package files`);
+  console.log(`📦 Configuring trusted publishing for: ${packageName} (${provider})`);
 
-  if (values['dry-run']) {
-    console.log(`\n🔍 Dry run mode - package created but not published`);
-    console.log(`📁 Package location: ${packageDir}`);
-    console.log(`\nTo publish manually:`);
-    console.log(`  cd ${packageDir}`);
-    console.log(`  npm publish --registry ${values.registry}${packageName.startsWith('@') ? ' --access ' + values.access : ''}`);
-  } else {
-    // Publish the package
-    console.log(`\n📤 Publishing package to npm...`);
-    
-    const publishArgs = ['publish', '--registry', values.registry];
-    if (packageName.startsWith('@')) {
-      publishArgs.push('--access', values.access);
-    }
-    if (npmToken) {
-      publishArgs.push('--userconfig', join(packageDir, '.npmrc'));
-    }
-
-    try {
-      execFileSync('npm', publishArgs, {
-        cwd: packageDir,
-        stdio: 'inherit',
-        shell: true
-      });
-      
-      console.log(`\n✅ Successfully published: ${packageName}`);
-
-      // Set MFA requirement if specified
-      if (values.mfa) {
-        setMfa(packageName, values);
-      }
-
-      console.log(`\n🔗 View your package at: https://www.npmjs.com/package/${packageName}`);
-      console.log(`\nNext steps:`);
-      console.log(`1. Go to https://www.npmjs.com/package/${packageName}/access`);
-      console.log(`2. Configure OIDC trusted publishing`);
-      console.log(`3. Set up your CI/CD workflow to publish with OIDC`);
-    } catch (publishError) {
-      console.error(`\n❌ Failed to publish package`);
-      console.error(`Error: ${publishError.message}`);
-      console.log(`\n📁 Package files are still available at: ${packageDir}`);
-      console.log(`You can try publishing manually:`);
-      console.log(`  cd ${packageDir}`);
-      console.log(`  npm publish --registry ${values.registry}${packageName.startsWith('@') ? ' --access ' + values.access : ''}`);
-      process.exit(1);
-    }
+  try {
+    execFileSync('npm', trustArgs, {
+      stdio: 'inherit',
+      env: trustEnv
+    });
+    console.log(`\n✅ Successfully configured trusted publishing for: ${packageName}`);
+  } catch (trustError) {
+    console.error(`\n❌ Failed to configure trusted publishing`);
+    console.error(`Error: ${trustError.message}`);
+    process.exit(1);
   }
+
+  // Set MFA requirement if specified
+  if (values.mfa && !values['dry-run']) {
+    setMfa(packageName, { ...values, npmrcPath: trustNpmrcPath });
+  }
+
+  // Clean up temporary .npmrc
+  if (trustTempDir) {
+    try {
+      await rm(trustTempDir, { recursive: true, force: true });
+    } catch {}
+  }
+
+  // Print summary
+  console.log(`\n--- Summary ---`);
+  console.log(`Package:  ${packageName}`);
+  console.log(`Provider: ${provider}`);
+  if (provider === 'github') {
+    console.log(`Repo:     ${values['github.repo']}`);
+    console.log(`File:     ${values['github.file']}`);
+    if (values['github.env']) {
+      console.log(`Env:      ${values['github.env']}`);
+    }
+  } else if (provider === 'gitlab') {
+    console.log(`Repo:     ${values['gitlab.repo']}`);
+    console.log(`File:     ${values['gitlab.file']}`);
+    if (values['gitlab.env']) {
+      console.log(`Env:      ${values['gitlab.env']}`);
+    }
+  } else if (provider === 'circleci') {
+    console.log(`Org ID:   ${values['circleci.org-id']}`);
+    console.log(`Project:  ${values['circleci.project-id']}`);
+  }
+  if (values.mfa) {
+    console.log(`MFA:      ${values.mfa}`);
+  }
+  console.log(`Registry: ${values.registry}`);
+  console.log(`URL:      https://www.npmjs.com/package/${packageName}`);
+
+  process.exit(0);
+}
+
+// Legacy mode: publish placeholder package and guide manual OIDC setup
+try {
+  await publishPlaceholder(packageName, {
+    registry: values.registry,
+    access: values.access,
+    dryRun: values['dry-run']
+  });
 } catch (error) {
-  console.error(`\n❌ Error: ${error.message}`);
+  console.error(`\n❌ Failed to publish placeholder package`);
+  console.error(`Error: ${error.message}`);
   process.exit(1);
-} finally {
-  // Clean up temp directory if not in dry-run mode
-  if (!values['dry-run']) {
-    try {
-      await rm(packageDir, { recursive: true, force: true });
-      console.log(`\n🧹 Cleaned up temp directory`);
-    } catch (cleanupError) {
-      console.warn(`⚠️  Could not clean up temp directory: ${cleanupError.message}`);
-    }
-  }
+}
+
+// Set MFA requirement if specified
+if (values.mfa && !values['dry-run']) {
+  setMfa(packageName, values);
+}
+
+if (!values['dry-run']) {
+  console.log(`\n🔗 View your package at: https://www.npmjs.com/package/${packageName}`);
+  console.log(`\nNext steps:`);
+  console.log(`1. Go to https://www.npmjs.com/package/${packageName}/access`);
+  console.log(`2. Configure OIDC trusted publishing`);
+  console.log(`3. Set up your CI/CD workflow to publish with OIDC`);
 }
