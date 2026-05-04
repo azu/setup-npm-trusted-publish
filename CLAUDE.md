@@ -4,18 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CLI tool to set up OIDC trusted publishing for npm packages. npm requires a package to exist before configuring trusted publishing — this tool handles that by publishing a placeholder first, then configuring trust.
+CLI tool to set up OIDC trusted publishing for npm packages. npm requires a package to exist before configuring trusted publishing — this tool handles that by publishing a minimal placeholder package. The user then configures OIDC trusted publishing manually on npmjs.com.
 
-Two modes:
-- **npm trust mode**: When `--github.*`/`--gitlab.*`/`--circleci.*` flags are provided (requires npm >= 11.10.0). Auto-publishes placeholder if package doesn't exist, then runs `npm trust`.
-- **Legacy mode**: Publishes placeholder package only, user configures OIDC manually on npmjs.com.
+`npm trust` is intentionally NOT supported: it requires interactive 2FA OTP at the account level and explicitly does not accept Granular Access Tokens with bypass 2FA, which makes it unusable for the automation flow this CLI targets. See README "Why not use `npm trust`?" section.
 
 ## Commands
 
 ```bash
-# Run tests
-node --experimental-strip-types ./test/test.ts
-
 # Run CLI locally
 ./bin/cli.js <package-name> [options]
 ```
@@ -24,18 +19,16 @@ No build step — the CLI is a single ES module file (`bin/cli.js`) using only N
 
 ## Architecture
 
-All logic is in `bin/cli.js` (~500 lines). Key functions:
+All logic is in `bin/cli.js`. Key functions:
 
-- `packageExists(pkgName, registry)` — checks if package exists on registry via `npm view`
-- `publishPlaceholder(pkgName, opts)` — creates temp dir with placeholder package.json/README and publishes
-- `buildTrustArgs(provider)` — constructs `npm trust` CLI arguments for github/gitlab/circleci
-- `setMfa(pkgName, opts)` — sets MFA requirement via `npm access set mfa=...`
+- `publishPlaceholder(pkgName, opts)` — creates temp dir with placeholder package.json/README and publishes; swallows "cannot publish over the previously published versions" so re-runs after unpublish do not abort the rest of the flow
+- `setMfa(pkgName, opts)` — sets MFA requirement via `npm access set mfa=...`; accepts `npmrcPath` for `NPM_TOKEN` auth
 
-Authentication: When `NPM_TOKEN` env var is set, creates a temporary `.npmrc` and passes it via `npm_config_userconfig` environment variable (not `--userconfig` flag, which `npm trust` doesn't support).
+Authentication: When `NPM_TOKEN` env var is set, creates a temporary `.npmrc` and passes it via `--userconfig` (for `npm publish`) or `npm_config_userconfig` env var (for `npm access`). The `.npmrc` for the publish step lives inside the temp package dir; a separate `.npmrc` is created for `setMfa` because the publish-step temp dir is cleaned up before MFA is set.
 
 ## Registry
 
-User's `~/.npmrc` may set a custom registry. All npm commands (`view`, `publish`, `trust`, `access`) must explicitly pass `--registry`. `npm trust` does not accept the `--userconfig` flag, so pass the temporary `.npmrc` path via `npm_config_userconfig` environment variable instead.
+User's `~/.npmrc` may set a custom registry. All npm commands (`publish`, `access`) must explicitly pass `--registry`.
 
 ## npm MFA values (counterintuitive)
 
