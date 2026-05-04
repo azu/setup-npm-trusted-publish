@@ -360,12 +360,21 @@ For more details about npm's trusted publishing feature, see:
       publishArgs.push('--userconfig', join(pkgDir, '.npmrc'));
     }
 
-    execFileSync('npm', publishArgs, {
-      cwd: pkgDir,
-      stdio: 'inherit'
-    });
-
-    console.log(`\n✅ Successfully published: ${pkgName}`);
+    try {
+      execFileSync('npm', publishArgs, {
+        cwd: pkgDir,
+        stdio: ['inherit', 'inherit', 'pipe']
+      });
+      console.log(`\n✅ Successfully published: ${pkgName}`);
+    } catch (publishError) {
+      const stderr = publishError.stderr?.toString() ?? '';
+      process.stderr.write(stderr);
+      if (stderr.includes('cannot publish over the previously published versions')) {
+        console.log(`\nℹ️  Package "${pkgName}" version 0.0.1 was previously published (and possibly unpublished). Skipping placeholder publish.`);
+        return;
+      }
+      throw publishError;
+    }
   } finally {
     if (!opts.dryRun) {
       try {
@@ -504,7 +513,29 @@ try {
 
 // Set MFA requirement if specified
 if (values.mfa && !values['dry-run']) {
-  setMfa(packageName, values);
+  // publishPlaceholder cleaned up its own .npmrc, so create a fresh one for npm access
+  const npmToken = process.env.NPM_TOKEN;
+  let mfaTempDir;
+  let mfaNpmrcPath;
+  if (npmToken) {
+    mfaTempDir = join(tmpdir(), `npm-mfa-${randomBytes(8).toString('hex')}`);
+    await mkdir(mfaTempDir, { recursive: true });
+    const registryUrl = new URL(values.registry);
+    mfaNpmrcPath = join(mfaTempDir, '.npmrc');
+    await writeFile(
+      mfaNpmrcPath,
+      `registry=${values.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
+    );
+  }
+  try {
+    setMfa(packageName, { ...values, npmrcPath: mfaNpmrcPath });
+  } finally {
+    if (mfaTempDir) {
+      try {
+        await rm(mfaTempDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
 }
 
 if (!values['dry-run']) {
