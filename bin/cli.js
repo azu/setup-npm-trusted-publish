@@ -65,6 +65,11 @@ publishing MFA requirement at:
 Environment:
   NPM_TOKEN   npm auth token for placeholder publish.
               If set, creates a temporary .npmrc for authentication.
+
+Note: --github.* / --gitlab.* / --circleci.* / --mfa / --otp options were
+removed in v2 because npm trust and npm access set mfa=... require interactive
+2FA OTP and cannot be driven by NPM_TOKEN. Configure those manually on
+npmjs.com after this CLI publishes the placeholder. See README for details.
 `);
   process.exit(0);
 }

@@ -6,9 +6,6 @@
   "bin": {
     "setup-npm-trusted-publish": "./bin/cli.js"
   },
-  "scripts": {
-    "test": "node --experimental-strip-types ./test/test.ts"
-  },
   "keywords": [
     "npm",
     "oidc",

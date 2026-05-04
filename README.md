@@ -48,7 +48,7 @@ setup-npm-trusted-publish my-package --dry-run
 setup-npm-trusted-publish my-package --registry https://npm.example.com
 ```
 
-After publishing, configure OIDC trusted publishing and publishing MFA requirement (`mfa=automation` / `mfa=publish`) on npmjs.com under `https://www.npmjs.com/package/<package-name>/access`. Both `npm trust` and `npm access set mfa=...` require interactive 2FA OTP and cannot be driven by `NPM_TOKEN` (see "Why not use `npm trust`?" below for details), so they are intentionally not part of this CLI.
+After publishing, configure OIDC trusted publishing and publishing MFA requirement (`mfa=automation` / `mfa=publish`) on npmjs.com under `https://www.npmjs.com/package/<package-name>/access`. Both `npm trust` and `npm access set mfa=...` require interactive 2FA OTP and cannot be driven by `NPM_TOKEN` (see "Why not use `npm trust` or `npm access set mfa=...`?" below for details), so they are intentionally not part of this CLI.
 
 ## Usage without local npm login
 
