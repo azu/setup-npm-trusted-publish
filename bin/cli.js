@@ -29,9 +29,7 @@ const { values, positionals } = parseArgs({
     registry: {
       type: 'string',
       default: 'https://registry.npmjs.org'
-    },
-    mfa: { type: 'string' },
-    otp: { type: 'string' }
+    }
   },
   allowPositionals: true
 });
@@ -52,20 +50,16 @@ Options:
   --dry-run       Preview actions without making changes
   --access        Access level for scoped packages (public/restricted) [default: public]
   --registry      npm registry URL [default: https://registry.npmjs.org]
-  --mfa           Set publishing MFA requirement after setup:
-                    none:       No MFA requirement
-                    automation: Require 2FA or granular access token with bypass 2FA enabled (for CI/CD)
-                    publish:    Require 2FA and disallow tokens (interactive publish only)
-  --otp           One-time password for 2FA (optional, npm will prompt interactively if needed)
 
 Examples:
   setup-npm-trusted-publish my-package
-  setup-npm-trusted-publish @scope/my-package --mfa publish
+  setup-npm-trusted-publish @scope/my-package
   read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
   setup-npm-trusted-publish my-package --dry-run
   setup-npm-trusted-publish my-package --registry https://npm.example.com
 
-After this tool publishes the placeholder, configure OIDC trusted publishing at:
+After this tool publishes the placeholder, configure OIDC trusted publishing and
+publishing MFA requirement at:
   https://www.npmjs.com/package/<package-name>/access
 
 Environment:
@@ -95,37 +89,6 @@ if (!validPackageNameRegex.test(packageName)) {
   console.error(`Error: Invalid package name: ${packageName}`);
   console.error('Package names must be lowercase and can contain letters, numbers, hyphens, periods, and underscores');
   process.exit(1);
-}
-
-// Validate --mfa value
-if (values.mfa && !['none', 'publish', 'automation'].includes(values.mfa)) {
-  console.error(`Error: --mfa must be one of: none, publish, automation (got: ${values.mfa})`);
-  process.exit(1);
-}
-
-function setMfa(pkgName, opts) {
-  console.log(`\n🔒 Setting MFA requirement to "${opts.mfa}" for: ${pkgName}`);
-  const accessArgs = ['access', 'set', `mfa=${opts.mfa}`, pkgName];
-  if (opts.otp) {
-    accessArgs.push('--otp', opts.otp);
-  }
-  accessArgs.push('--registry', opts.registry);
-  const mfaEnv = { ...process.env };
-  if (opts.npmrcPath) {
-    mfaEnv.npm_config_userconfig = opts.npmrcPath;
-  }
-  try {
-    execFileSync('npm', accessArgs, {
-      stdio: 'inherit',
-      env: mfaEnv
-    });
-    console.log(`✅ MFA requirement set to "${opts.mfa}"`);
-  } catch (mfaError) {
-    console.error(`❌ Failed to set MFA requirement`);
-    console.error(`Error: ${mfaError.message}`);
-    console.error(`You can set it manually: npm access set mfa=${opts.mfa} ${pkgName}`);
-    process.exit(1);
-  }
 }
 
 // Publish a placeholder package to reserve the name
@@ -268,33 +231,6 @@ try {
   console.error(`\n❌ Failed to publish placeholder package`);
   console.error(`Error: ${error.message}`);
   process.exit(1);
-}
-
-// Set MFA requirement if specified
-if (values.mfa && !values['dry-run']) {
-  // publishPlaceholder cleaned up its own .npmrc, so create a fresh one for npm access
-  const npmToken = process.env.NPM_TOKEN;
-  let mfaTempDir;
-  let mfaNpmrcPath;
-  if (npmToken) {
-    mfaTempDir = join(tmpdir(), `npm-mfa-${randomBytes(8).toString('hex')}`);
-    await mkdir(mfaTempDir, { recursive: true });
-    const registryUrl = new URL(values.registry);
-    mfaNpmrcPath = join(mfaTempDir, '.npmrc');
-    await writeFile(
-      mfaNpmrcPath,
-      `registry=${values.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
-    );
-  }
-  try {
-    setMfa(packageName, { ...values, npmrcPath: mfaNpmrcPath });
-  } finally {
-    if (mfaTempDir) {
-      try {
-        await rm(mfaTempDir, { recursive: true, force: true });
-      } catch {}
-    }
-  }
 }
 
 if (!values['dry-run']) {

@@ -35,8 +35,6 @@ Options:
 - `--dry-run` - Create the package but don't publish
 - `--access <public|restricted>` - Access level for scoped packages (default: public)
 - `--registry <url>` - npm registry URL (default: `https://registry.npmjs.org`)
-- `--mfa <none|automation|publish>` - Set publishing MFA requirement. `automation`: require 2FA or granular access token with bypass 2FA enabled (for CI/CD). `publish`: require 2FA and disallow tokens (interactive publish only)
-- `--otp <code>` - One-time password for 2FA
 
 Environment Variables:
 - `NPM_TOKEN` - npm authentication token for users who don't have npm login configured locally. If set, a temporary `.npmrc` is created in the package directory with `//registry.npmjs.org/:_authToken=${NPM_TOKEN}`. npm expands `${NPM_TOKEN}` at runtime, so the actual token is never written to disk. The `.npmrc` is cleaned up with the temporary directory after publishing.
@@ -44,11 +42,13 @@ Environment Variables:
 Examples:
 ```bash
 setup-npm-trusted-publish my-package
-setup-npm-trusted-publish @myorg/my-package --mfa publish
+setup-npm-trusted-publish @myorg/my-package
 read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
 setup-npm-trusted-publish my-package --dry-run
 setup-npm-trusted-publish my-package --registry https://npm.example.com
 ```
+
+After publishing, configure OIDC trusted publishing and publishing MFA requirement (`mfa=automation` / `mfa=publish`) on npmjs.com under `https://www.npmjs.com/package/<package-name>/access`. Both `npm trust` and `npm access set mfa=...` require interactive 2FA OTP and cannot be driven by `NPM_TOKEN` (see "Why not use `npm trust`?" below for details), so they are intentionally not part of this CLI.
 
 ## Usage without local npm login
 
@@ -79,7 +79,7 @@ The generated README explicitly indicates:
 - It exists **ONLY** for OIDC configuration
 - It should **NOT** be used as a dependency
 
-## Why not use `npm trust`?
+## Why not use `npm trust` or `npm access set mfa=...`?
 
 npm 11.10.0+ provides an `npm trust` command that can configure trusted publishing without publishing a placeholder. However, it has a significant limitation that makes it unsuitable for this tool's automation use case:
 
@@ -87,7 +87,9 @@ npm 11.10.0+ provides an `npm trust` command that can configure trusted publishi
 >
 > — [npm-trust documentation](https://docs.npmjs.com/cli/v11/commands/npm-trust)
 
-In short, `npm trust` requires interactive 2FA OTP and cannot be driven by `NPM_TOKEN` (automation token / GAT with bypass 2FA). For non-interactive setup flows that this CLI targets, the placeholder publish + manual web UI configuration is the only reliable path. If `npm trust` works for you interactively, you can run it directly without this tool.
+`npm access set mfa=publish|automation` falls back to the same web auth flow and rejects token-based execution with `401 token is invalid` ([npm/cli#9268](https://github.com/npm/cli/issues/9268), [#8869](https://github.com/npm/cli/issues/8869)).
+
+In short, both commands require interactive 2FA OTP and cannot be driven by `NPM_TOKEN` (automation token / GAT with bypass 2FA). For non-interactive setup flows that this CLI targets, the placeholder publish + manual web UI configuration is the only reliable path. If those commands work for you interactively, run them directly without this tool.
 
 ## Workflow
 
