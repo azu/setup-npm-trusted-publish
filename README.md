@@ -35,6 +35,7 @@ Options:
 - `--dry-run` - Create the package but don't publish
 - `--access <public|restricted>` - Access level for scoped packages (default: public)
 - `--registry <url>` - npm registry URL (default: `https://registry.npmjs.org`)
+- `--package-version <version>` - Version for the placeholder package (default: `0.0.0`)
 
 Environment Variables:
 - `NPM_TOKEN` - npm authentication token for users who don't have npm login configured locally. If set, a temporary `.npmrc` is created in the package directory with `//registry.npmjs.org/:_authToken=${NPM_TOKEN}`. npm expands `${NPM_TOKEN}` at runtime, so the actual token is never written to disk. The `.npmrc` is cleaned up with the temporary directory after publishing.
@@ -46,6 +47,7 @@ setup-npm-trusted-publish @myorg/my-package
 read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
 setup-npm-trusted-publish my-package --dry-run
 setup-npm-trusted-publish my-package --registry https://npm.example.com
+setup-npm-trusted-publish my-package --package-version 0.0.1
 ```
 
 After publishing, configure OIDC trusted publishing and publishing MFA requirement (`mfa=automation` / `mfa=publish`) on npmjs.com under `https://www.npmjs.com/package/<package-name>/access`. Both `npm trust` and `npm access set mfa=...` require interactive 2FA OTP and cannot be driven by `NPM_TOKEN` (see "Why not use `npm trust` or `npm access set mfa=...`?" below for details), so they are intentionally not part of this CLI.
