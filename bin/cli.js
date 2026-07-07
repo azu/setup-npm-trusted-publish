@@ -29,6 +29,10 @@ const { values, positionals } = parseArgs({
     registry: {
       type: 'string',
       default: 'https://registry.npmjs.org'
+    },
+    'package-version': {
+      type: 'string',
+      default: '0.0.0'
     }
   },
   allowPositionals: true
@@ -45,11 +49,12 @@ Arguments:
   <package-name>  The name of the npm package to setup (e.g. my-package, @scope/my-package)
 
 Options:
-  -h, --help      Show help
-  -v, --version   Show version
-  --dry-run       Preview actions without making changes
-  --access        Access level for scoped packages (public/restricted) [default: public]
-  --registry      npm registry URL [default: https://registry.npmjs.org]
+  -h, --help               Show help
+  -v, --version            Show version
+  --dry-run                Preview actions without making changes
+  --access                 Access level for scoped packages (public/restricted) [default: public]
+  --registry               npm registry URL [default: https://registry.npmjs.org]
+  --package-version        Version to use for the placeholder package [default: 0.0.0]
 
 Examples:
   setup-npm-trusted-publish my-package
@@ -57,6 +62,7 @@ Examples:
   read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
   setup-npm-trusted-publish my-package --dry-run
   setup-npm-trusted-publish my-package --registry https://npm.example.com
+  setup-npm-trusted-publish my-package --package-version 0.0.1
 
 After this tool publishes the placeholder, configure OIDC trusted publishing and
 publishing MFA requirement at:
@@ -103,7 +109,7 @@ async function publishPlaceholder(pkgName, opts) {
   try {
     const packageJson = {
       name: pkgName,
-      version: '0.0.1',
+      version: opts.packageVersion,
       description: `OIDC trusted publishing setup package for ${pkgName}`,
       keywords: ['oidc', 'trusted-publishing', 'setup']
     };
@@ -203,7 +209,7 @@ For more details about npm's trusted publishing feature, see:
       const stderr = publishError.stderr?.toString() ?? '';
       process.stderr.write(stderr);
       if (stderr.includes('cannot publish over the previously published versions')) {
-        console.log(`\nℹ️  Package "${pkgName}" version 0.0.1 was previously published (and possibly unpublished). Skipping placeholder publish.`);
+        console.log(`\nℹ️  Package "${pkgName}" version ${opts.packageVersion} was previously published (and possibly unpublished). Skipping placeholder publish.`);
         return;
       }
       throw publishError;
@@ -225,7 +231,8 @@ try {
   await publishPlaceholder(packageName, {
     registry: values.registry,
     access: values.access,
-    dryRun: values['dry-run']
+    dryRun: values['dry-run'],
+    packageVersion: values['package-version']
   });
 } catch (error) {
   console.error(`\n❌ Failed to publish placeholder package`);
