@@ -1,6 +1,6 @@
 {
   "name": "setup-npm-trusted-publish",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Setup npm package for trusted publishing with OIDC",
   "type": "module",
   "bin": {
