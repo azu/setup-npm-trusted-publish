@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -95,6 +96,22 @@ if (!validPackageNameRegex.test(packageName)) {
   console.error(`Error: Invalid package name: ${packageName}`);
   console.error('Package names must be lowercase and can contain letters, numbers, hyphens, periods, and underscores');
   process.exit(1);
+}
+
+// npm is `npm.cmd` on Windows, which execFile cannot start (Node refuses to spawn a .cmd file without a shell).
+// Run npm's own entry script with this Node instead: no shell is involved, so no argument needs quoting.
+// Elsewhere, or when the script cannot be found (for example npm is a standalone npm.exe shim), run `npm` as before.
+function resolveNpmCommand(args) {
+  if (process.platform === 'win32') {
+    const npmCli = [
+      process.env.npm_execpath,
+      join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    ].find((candidate) => candidate && basename(candidate) === 'npm-cli.js' && existsSync(candidate));
+    if (npmCli) {
+      return { command: process.execPath, args: [npmCli, ...args] };
+    }
+  }
+  return { command: 'npm', args };
 }
 
 // Publish a placeholder package to reserve the name
@@ -200,7 +217,8 @@ For more details about npm's trusted publishing feature, see:
     }
 
     try {
-      execFileSync('npm', publishArgs, {
+      const npm = resolveNpmCommand(publishArgs);
+      execFileSync(npm.command, npm.args, {
         cwd: pkgDir,
         stdio: ['inherit', 'inherit', 'pipe']
       });
