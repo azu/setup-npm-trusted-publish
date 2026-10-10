@@ -6,6 +6,9 @@
   "bin": {
     "setup-npm-trusted-publish": "./bin/cli.js"
   },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
   "keywords": [
     "npm",
     "oidc",

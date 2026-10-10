@@ -13,9 +13,18 @@ CLI tool to set up OIDC trusted publishing for npm packages. npm requires a pack
 ```bash
 # Run CLI locally
 ./bin/cli.js <package-name> [options]
+
+# Run E2E tests (Node.js 22+)
+npm test
 ```
 
 No build step — the CLI is a single ES module file (`bin/cli.js`) using only Node.js built-ins.
+
+## Tests
+
+`test/*.test.js` are E2E tests using `node:test`. They run the CLI with the real npm CLI against a fake registry (`test/helpers/fake-registry.js`) that listens on `127.0.0.1` and records every request, including the published tarball contents.
+
+`test/helpers/sandbox.js` builds an isolated environment for each test: HOME, XDG/AppData dirs, npm userconfig/globalconfig/cache and temp dirs point into a throwaway directory, and the parent environment is not inherited (only PATH-related variables), so real credentials such as `~/.npmrc` or `NPM_TOKEN` are never read. Tests must never point at a real registry; `createSandbox` refuses any registry URL other than `http://127.0.0.1:<port>/`.
 
 ## Architecture
 
