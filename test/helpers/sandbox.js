@@ -4,7 +4,8 @@
 // so the user's real credentials (~/.npmrc, pnpm auth.ini, NPM_TOKEN, ...) are never read.
 import { mkdtemp, mkdir, rm, writeFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import * as fsSync from 'node:fs';
+import { join, dirname, delimiter } from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -118,4 +119,22 @@ export async function findFilesContaining(dir, needle) {
     if ((await readFile(file)).includes(needle)) hits.push(file);
   }
   return hits;
+}
+
+// Resolve the pnpm on PATH so tests can run it without a shell (pnpm installed with npm is `pnpm.cmd` on Windows).
+// Returns undefined when pnpm is not installed.
+export function pnpmCommand(args, { PATH = process.env.PATH ?? '' } = {}) {
+  const { existsSync } = fsSync;
+  for (const dir of PATH.split(delimiter)) {
+    if (!dir) continue;
+    if (process.platform === 'win32') {
+      if (existsSync(join(dir, 'pnpm.exe'))) return { command: join(dir, 'pnpm.exe'), args };
+      if (!existsSync(join(dir, 'pnpm.cmd'))) continue;
+      const script = ['pnpm.cjs', 'pnpm.mjs'].map((file) => join(dir, 'node_modules', 'pnpm', 'bin', file)).find(existsSync);
+      if (script) return { command: process.execPath, args: [script, ...args] };
+    } else if (existsSync(join(dir, 'pnpm'))) {
+      return { command: join(dir, 'pnpm'), args };
+    }
+  }
+  return undefined;
 }

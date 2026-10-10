@@ -22,7 +22,7 @@ No build step — the CLI is a single ES module file (`bin/cli.js`) using only N
 
 ## Tests
 
-`test/*.test.js` are E2E tests using `node:test`. They run the CLI with the real npm CLI against a fake registry (`test/helpers/fake-registry.js`) that listens on `127.0.0.1` and records every request, including the published tarball contents.
+`test/*.test.js` are E2E tests using `node:test`. They run the CLI with the real npm and pnpm CLIs (pnpm tests are skipped when pnpm is not on PATH) against a fake registry (`test/helpers/fake-registry.js`) that listens on `127.0.0.1` and records every request, including the published tarball contents.
 
 `test/helpers/sandbox.js` builds an isolated environment for each test: HOME, XDG/AppData dirs, npm userconfig/globalconfig/cache and temp dirs point into a throwaway directory, and the parent environment is not inherited (only PATH-related variables), so real credentials such as `~/.npmrc` or `NPM_TOKEN` are never read. Tests must never point at a real registry; `createSandbox` refuses any registry URL other than `http://127.0.0.1:<port>/`.
 
@@ -31,8 +31,11 @@ No build step — the CLI is a single ES module file (`bin/cli.js`) using only N
 All logic is in `bin/cli.js`. Key function:
 
 - `publishPlaceholder(pkgName, opts)` — creates temp dir with placeholder package.json/README and publishes; swallows "cannot publish over the previously published versions" so re-runs after unpublish do not abort the rest of the flow
+- `detectPackageManager()` / `resolveNpmCommand()` / `resolvePnpmCommand()` — choose and locate the package manager used for publishing (Windows: run the entry script with Node instead of the `.cmd` shim)
 
-Authentication: When `NPM_TOKEN` env var is set, creates a temporary `.npmrc` inside the package temp dir and passes it via `--userconfig` to `npm publish`. The `.npmrc` is cleaned up with the temp dir.
+Package manager: `detectPackageManager()` picks pnpm when `npm_config_user_agent` starts with `pnpm/` (`pnpm dlx` / `pnpx`), otherwise npm (npx, direct run, unknown). `npm_execpath` is not used for detection (pnpm 10 does not set it for `pnpm dlx`); `resolvePnpmCommand()` only uses it to locate the launching pnpm. Never retry with the other package manager on failure.
+
+Authentication: When `NPM_TOKEN` env var is set, with npm it creates a temporary `.npmrc` inside the package temp dir and passes it via `--userconfig` to `npm publish`. The `.npmrc` is cleaned up with the temp dir. With pnpm, the token is passed via `pnpm_config_//<host>/:_authToken` and `npm_config_//<host>/:_authToken` env vars of the `pnpm publish` child process (pnpm 11+ ignores `${...}` in a project `.npmrc` and has no `--userconfig`).
 
 ## Registry
 

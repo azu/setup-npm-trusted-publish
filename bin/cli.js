@@ -2,7 +2,7 @@
 import { parseArgs } from 'node:util';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, delimiter, dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -69,9 +69,15 @@ After this tool publishes the placeholder, configure OIDC trusted publishing and
 publishing MFA requirement at:
   https://www.npmjs.com/package/<package-name>/access
 
+Package manager:
+  Publishes with the package manager that launched this CLI.
+  pnpm dlx / pnpx: pnpm publish (uses the credentials saved by pnpm login)
+  npx, a global install or anything else: npm publish
+
 Environment:
   NPM_TOKEN   npm auth token for placeholder publish.
-              If set, creates a temporary .npmrc for authentication.
+              npm: creates a temporary .npmrc for authentication.
+              pnpm: passed to pnpm through its environment only.
 `);
   process.exit(0);
 }
@@ -112,6 +118,39 @@ function resolveNpmCommand(args) {
     }
   }
   return { command: 'npm', args };
+}
+
+// Follow the package manager that launched this CLI. `pnpm dlx` and `pnpx` set npm_config_user_agent to `pnpm/<version> ...`.
+// npx, a global install, other package managers, or a missing user agent keep using npm.
+// npm_execpath is not used to decide: pnpm 10 does not set it for `pnpm dlx`.
+function detectPackageManager(userAgent = process.env.npm_config_user_agent ?? '') {
+  return userAgent.startsWith('pnpm/') ? 'pnpm' : 'npm';
+}
+
+// Run the pnpm that launched this CLI when npm_execpath points to it (pnpm 11+), otherwise `pnpm` from PATH.
+// Like npm, pnpm installed with npm is `pnpm.cmd` on Windows, so run its entry script with this Node instead.
+function resolvePnpmCommand(args) {
+  const pnpmPath = process.env.npm_execpath;
+  if (pnpmPath && /^pnpm(\.(?:c?js|mjs|exe))?$/i.test(basename(pnpmPath)) && existsSync(pnpmPath)) {
+    if (/\.(?:c?js|mjs)$/i.test(pnpmPath)) {
+      return { command: process.execPath, args: [pnpmPath, ...args] };
+    }
+    if (process.platform !== 'win32' || /\.exe$/i.test(pnpmPath)) {
+      return { command: pnpmPath, args };
+    }
+  }
+  if (process.platform === 'win32') {
+    for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+      if (!dir || !existsSync(join(dir, 'pnpm.cmd'))) continue;
+      const pnpmCli = ['pnpm.cjs', 'pnpm.mjs']
+        .map((file) => join(dir, 'node_modules', 'pnpm', 'bin', file))
+        .find((candidate) => existsSync(candidate));
+      if (pnpmCli) {
+        return { command: process.execPath, args: [pnpmCli, ...args] };
+      }
+    }
+  }
+  return { command: 'pnpm', args };
 }
 
 // Publish a placeholder package to reserve the name
@@ -185,13 +224,24 @@ For more details about npm's trusted publishing feature, see:
 
     await writeFile(join(pkgDir, 'README.md'), readmeContent);
 
+    const { packageManager } = opts;
     const npmToken = process.env.NPM_TOKEN;
+    const publishEnv = { ...process.env };
     if (npmToken) {
       const registryUrl = new URL(opts.registry);
-      await writeFile(
-        join(pkgDir, '.npmrc'),
-        `registry=${opts.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
-      );
+      if (packageManager === 'pnpm') {
+        // pnpm 11+ ignores `${NPM_TOKEN}` in a project .npmrc and has no --userconfig, so pass the token
+        // through the environment instead of writing it to disk: pnpm_config_ for pnpm 11.6+, npm_config_ for pnpm 10
+        // (which publishes through npm).
+        const authKey = `//${registryUrl.host}/:_authToken`;
+        publishEnv[`pnpm_config_${authKey}`] = npmToken;
+        publishEnv[`npm_config_${authKey}`] = npmToken;
+      } else {
+        await writeFile(
+          join(pkgDir, '.npmrc'),
+          `registry=${opts.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
+        );
+      }
       console.log(`🔑 Using NPM_TOKEN for authentication`);
     }
 
@@ -202,31 +252,41 @@ For more details about npm's trusted publishing feature, see:
       console.log(`📁 Package location: ${pkgDir}`);
       console.log(`\nTo publish manually:`);
       console.log(`  cd ${pkgDir}`);
-      console.log(`  npm publish --registry ${opts.registry}${pkgName.startsWith('@') ? ' --access ' + opts.access : ''}`);
+      console.log(`  ${packageManager} publish --registry ${opts.registry}${packageManager === 'pnpm' ? ' --no-git-checks' : ''}${pkgName.startsWith('@') ? ' --access ' + opts.access : ''}`);
       return;
     }
 
-    console.log(`\n📤 Publishing package to npm...`);
+    console.log(`\n📤 Publishing package to npm with ${packageManager}...`);
 
     const publishArgs = ['publish', '--registry', opts.registry];
+    if (packageManager === 'pnpm') {
+      // The temp dir is not a git repository; skip pnpm's branch/clean-tree checks.
+      publishArgs.push('--no-git-checks');
+    }
     if (pkgName.startsWith('@')) {
       publishArgs.push('--access', opts.access);
     }
-    if (npmToken) {
+    if (npmToken && packageManager === 'npm') {
       publishArgs.push('--userconfig', join(pkgDir, '.npmrc'));
     }
 
     try {
-      const npm = resolveNpmCommand(publishArgs);
-      execFileSync(npm.command, npm.args, {
+      const publishCommand = packageManager === 'pnpm' ? resolvePnpmCommand(publishArgs) : resolveNpmCommand(publishArgs);
+      execFileSync(publishCommand.command, publishCommand.args, {
         cwd: pkgDir,
+        env: publishEnv,
         stdio: ['inherit', 'inherit', 'pipe']
       });
       console.log(`\n✅ Successfully published: ${pkgName}`);
     } catch (publishError) {
+      if (publishError.code === 'ENOENT') {
+        // Do not fall back to another package manager: it would use different credentials.
+        throw new Error(`${packageManager} was not found. This CLI was launched by ${packageManager}, so it publishes with ${packageManager}. Install ${packageManager}, or run this CLI with ${packageManager === 'pnpm' ? 'npx to publish with npm' : 'pnpm dlx to publish with pnpm'}.`);
+      }
       const stderr = publishError.stderr?.toString() ?? '';
       process.stderr.write(stderr);
-      if (stderr.includes('cannot publish over the previously published versions')) {
+      // pnpm 12 wraps long error lines with box-drawing characters, so compare with whitespace collapsed.
+      if (stderr.replace(/[\s│]+/g, ' ').includes('cannot publish over the previously published versions')) {
         console.log(`\nℹ️  Package "${pkgName}" version ${opts.packageVersion} was previously published (and possibly unpublished). Skipping placeholder publish.`);
         return;
       }
@@ -245,8 +305,11 @@ For more details about npm's trusted publishing feature, see:
 }
 
 // Publish placeholder package and guide manual OIDC setup
+const packageManager = detectPackageManager();
+console.log(`🧰 Package manager: ${packageManager}`);
 try {
   await publishPlaceholder(packageName, {
+    packageManager,
     registry: values.registry,
     access: values.access,
     dryRun: values['dry-run'],

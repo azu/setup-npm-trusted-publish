@@ -28,7 +28,11 @@ jobs:
         with:
           node-version: 'lts/*'
 
-      # E2E tests run the real npm CLI against a local fake registry (127.0.0.1) inside an isolated HOME.
+      - name: Install pnpm
+        run: npm install --global pnpm@latest && pnpm --version
+        shell: bash
+
+      # E2E tests run the real npm and pnpm CLIs against a local fake registry (127.0.0.1) inside an isolated HOME.
       # They never read real credentials and never publish to the real npm registry.
       - name: Test
         run: npm test
