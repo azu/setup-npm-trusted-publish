@@ -94,7 +94,8 @@ describe('npm publish via fake registry', () => {
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /was previously published .*Skipping placeholder publish/);
     assert.match(result.stdout, /Next steps:/);
-    assert.equal(publishRequests(registry).length, 1);
+    // npm 10 sends the PUT and gets 403; npm 11 checks the packument first and refuses without a PUT.
+    assert.ok(publishRequests(registry).length <= 1);
     assert.equal(registry.publishes.length, 0);
   });
 
