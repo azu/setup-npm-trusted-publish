@@ -163,7 +163,8 @@ describe('launched with pnpm dlx', { skip: !pnpm && 'pnpm is not installed' }, (
     const { registry, runPnpm } = await setup(t, { token: TOKEN, published: { 'pnpm-already-there': ['0.0.0'] } });
     const result = await dlx(runPnpm, ['pnpm-already-there', '--registry', registry.url], { NPM_TOKEN: TOKEN });
 
-    assert.equal(publishRequests(registry).length, 1);
+    // At most one PUT: no retry. pnpm 10 publishes through npm, and npm 11 refuses an existing version without a PUT.
+    assert.ok(publishRequests(registry).length <= 1);
     assert.equal(registry.publishes.length, 0);
     assertSentBy(registry, 'pnpm');
     if (pnpmMajor === 11) {
