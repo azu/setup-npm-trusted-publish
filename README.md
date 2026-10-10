@@ -25,6 +25,12 @@ Or run directly with npx:
 npx setup-npm-trusted-publish <package-name>
 ```
 
+Or with pnpm:
+
+```bash
+pnpm dlx setup-npm-trusted-publish <package-name>
+```
+
 ## Usage
 
 ```bash
@@ -38,7 +44,9 @@ Options:
 - `--package-version <version>` - Version for the placeholder package (default: `0.0.0`)
 
 Environment Variables:
-- `NPM_TOKEN` - npm authentication token for users who don't have npm login configured locally. If set, a temporary `.npmrc` is created in the package directory with `//registry.npmjs.org/:_authToken=${NPM_TOKEN}`. npm expands `${NPM_TOKEN}` at runtime, so the actual token is never written to disk. The `.npmrc` is cleaned up with the temporary directory after publishing.
+- `NPM_TOKEN` - npm authentication token for users who don't have npm login configured locally. The token is never written to disk.
+  - npm: a temporary `.npmrc` is created in the package directory with `//registry.npmjs.org/:_authToken=${NPM_TOKEN}`. npm expands `${NPM_TOKEN}` at runtime. The `.npmrc` is cleaned up with the temporary directory after publishing.
+  - pnpm: the token is passed to `pnpm publish` through its environment (`pnpm_config_//registry.npmjs.org/:_authToken` and `npm_config_//registry.npmjs.org/:_authToken`), because pnpm 11+ does not expand `${NPM_TOKEN}` in a project `.npmrc`.
 
 Examples:
 ```bash
@@ -51,6 +59,23 @@ setup-npm-trusted-publish my-package --package-version 0.0.1
 ```
 
 After publishing, configure OIDC trusted publishing and publishing MFA requirement (`mfa=automation` / `mfa=publish`) on npmjs.com under `https://www.npmjs.com/package/<package-name>/access`. Both `npm trust` and `npm access set mfa=...` require interactive 2FA OTP and cannot be driven by `NPM_TOKEN` (see "Why not use `npm trust` or `npm access set mfa=...`?" below for details), so they are intentionally not part of this CLI.
+
+## Package manager
+
+The placeholder is published with the package manager that launched this CLI:
+
+| How you run it | Publishes with |
+|---|---|
+| `pnpm dlx setup-npm-trusted-publish` / `pnpx setup-npm-trusted-publish` | `pnpm publish --no-git-checks` |
+| `npx setup-npm-trusted-publish`, a global install, or anything else | `npm publish` |
+
+The launcher is detected from the `npm_config_user_agent` environment variable (`pnpm/...` means pnpm). Your project's lockfile or `packageManager` field is not used, because the CLI publishes a placeholder from a temporary directory, not your project.
+
+This matters for authentication: since pnpm 11, `pnpm login` saves the token in pnpm's own config (`<pnpm config>/auth.ini`, or the global `config.yaml` since pnpm 12.1) instead of `~/.npmrc`, so npm cannot use it. Running this CLI with `pnpm dlx` publishes with the credentials from `pnpm login`. See [pnpm login](https://pnpm.io/cli/login) and [.npmrc & Authentication](https://pnpm.io/npmrc).
+
+If publishing fails, the CLI does not retry with the other package manager, since it would use different credentials.
+
+Known limitation: with pnpm 11, a "cannot publish over the previously published versions" error is printed by pnpm but the CLI exits with an error instead of skipping, because pnpm 11 prints that error to stdout, which stays attached to your terminal so that OTP prompts keep working. With npm, pnpm 10 and pnpm 12, the CLI skips the publish as before.
 
 ## Usage without local npm login
 
@@ -71,7 +96,7 @@ If you don't have npm login configured locally, you can use a one-time Granular 
 1. Creates a minimal npm package in a temporary directory
 2. Generates a `package.json` with basic metadata for OIDC setup
 3. Creates a `README.md` that **clearly states the package is for OIDC setup only**
-4. Automatically publishes the package to npm
+4. Automatically publishes the package to npm (with npm, or with pnpm when launched by pnpm)
 5. Cleans up the temporary directory
 6. Provides a direct link to configure OIDC at `https://www.npmjs.com/package/<package-name>/access`
 

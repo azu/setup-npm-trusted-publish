@@ -11,12 +11,13 @@ permissions:
 
 jobs:
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, pnpm ${{ matrix.pnpm }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        pnpm: ['10', '11', '12']
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -28,7 +29,13 @@ jobs:
         with:
           node-version: 'lts/*'
 
-      # E2E tests run the real npm CLI against a local fake registry (127.0.0.1) inside an isolated HOME.
+      - name: Install pnpm
+        run: npm install --global "pnpm@$PNPM_VERSION" && pnpm --version
+        shell: bash
+        env:
+          PNPM_VERSION: ${{ matrix.pnpm }}
+
+      # E2E tests run the real npm and pnpm CLIs against a local fake registry (127.0.0.1) inside an isolated HOME.
       # They never read real credentials and never publish to the real npm registry.
       - name: Test
         run: npm test
