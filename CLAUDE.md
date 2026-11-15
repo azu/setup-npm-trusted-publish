@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CLI tool to set up OIDC trusted publishing for npm packages. npm requires a package to exist before configuring trusted publishing — this tool handles that by publishing a minimal placeholder package. The user then configures OIDC trusted publishing and publishing MFA requirement manually on npmjs.com.
+CLI tool to set up OIDC trusted publishing for npm packages. It publishes a minimal placeholder package. With `--github.repo` / `--github.file` and/or `--mfa`, it configures package settings interactively after `npm login`; existing packages skip publishing. Without these flags, users configure settings on npmjs.com.
 
-`npm trust` and `npm access set mfa=...` are intentionally NOT supported: both require interactive 2FA OTP at the account level and reject token-based execution (`npm trust` explicitly disallows GAT with bypass 2FA per its docs; `npm access set mfa` falls back to web auth and returns `401 token is invalid`). For the non-interactive automation flow this CLI targets, only the placeholder publish step is reliable. See README "Why not use `npm trust` or `npm access set mfa=...`?" section.
+`npm trust` requires npm >= 11.15.0 and account-level 2FA. Bypass-2FA Granular Access Tokens cannot change access/trust settings. For interactive setup, require `NPM_TOKEN` to be unset and use local npm login credentials with inherited stdio for npm authentication prompts. Do not infer token type from credential source or prefix; `npm whoami` only verifies identity. Non-interactive `NPM_TOKEN` use remains placeholder-only. Dry runs with settings flags must not contact or mutate the registry.
 
 ## Commands
 
@@ -34,6 +34,8 @@ All logic is in `bin/cli.js`. Key function:
 - `detectPackageManager()` / `resolveNpmCommand()` / `resolvePnpmCommand()` — choose and locate the package manager used for publishing (Windows: run the entry script with Node instead of the `.cmd` shim)
 
 Package manager: `detectPackageManager()` picks pnpm when `npm_config_user_agent` starts with `pnpm/` (`pnpm dlx` / `pnpx`), otherwise npm (npx, direct run, unknown). `npm_execpath` is not used for detection (pnpm 10 does not set it for `pnpm dlx`); `resolvePnpmCommand()` only uses it to locate the launching pnpm. Never retry with the other package manager on failure.
+
+Interactive settings flags always select npm for both publishing and settings so that the entire setup uses the credentials from `npm login`. Use `resolveNpmCommand` for all npm subprocesses to preserve Windows support.
 
 Authentication: When `NPM_TOKEN` env var is set, with npm it creates a temporary `.npmrc` inside the package temp dir and passes it via `--userconfig` to `npm publish`. The `.npmrc` is cleaned up with the temp dir. With pnpm, the token is passed via `pnpm_config_//<host>/:_authToken` and `npm_config_//<host>/:_authToken` env vars of the `pnpm publish` child process (pnpm 11+ ignores `${...}` in a project `.npmrc` and has no `--userconfig`).
 

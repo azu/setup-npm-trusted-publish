@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { basename, delimiter, dirname, join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 
@@ -34,7 +34,11 @@ const { values, positionals } = parseArgs({
     'package-version': {
       type: 'string',
       default: '0.0.0'
-    }
+    },
+    mfa: { type: 'string' },
+    'github.repo': { type: 'string' },
+    'github.file': { type: 'string' },
+    'github.env': { type: 'string' }
   },
   allowPositionals: true
 });
@@ -45,6 +49,8 @@ Usage: setup-npm-trusted-publish <package-name> [options]
 
 Publishes a minimal placeholder package to npm so you can configure OIDC
 trusted publishing on npmjs.com afterwards.
+With --github.* or --mfa, also configures package settings interactively.
+Run npm login first; account-level 2FA is required for npm trust.
 
 Arguments:
   <package-name>  The name of the npm package to setup (e.g. my-package, @scope/my-package)
@@ -56,8 +62,22 @@ Options:
   --access                 Access level for scoped packages (public/restricted) [default: public]
   --registry               npm registry URL [default: https://registry.npmjs.org]
   --package-version        Version to use for the placeholder package [default: 0.0.0]
+  --mfa                    Set MFA requirement (none/automation/publish)
+                           publish: require 2FA and disallow tokens; OIDC remains allowed
+                           automation: require 2FA or a token with bypass 2FA
+  --github.repo            GitHub repository allowed to publish (owner/repo)
+  --github.file            Workflow filename in .github/workflows (e.g. release.yml)
+  --github.env             Required GitHub Actions environment (optional)
+
+GitHub configuration requires npm >= 11.15.0 and grants npm publish permission.
 
 Examples:
+  unset NPM_TOKEN
+  npm login --registry https://registry.npmjs.org
+  setup-npm-trusted-publish @scope/my-package \\
+    --github.repo owner/repo --github.file release.yml --mfa publish
+  npm logout --registry https://registry.npmjs.org
+
   setup-npm-trusted-publish my-package
   setup-npm-trusted-publish @scope/my-package
   read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish my-package
@@ -65,8 +85,7 @@ Examples:
   setup-npm-trusted-publish my-package --registry https://npm.example.com
   setup-npm-trusted-publish my-package --package-version 0.0.1
 
-After this tool publishes the placeholder, configure OIDC trusted publishing and
-publishing MFA requirement at:
+Without --github.* / --mfa, configure package settings at:
   https://www.npmjs.com/package/<package-name>/access
 
 Package manager:
@@ -78,6 +97,7 @@ Environment:
   NPM_TOKEN   npm auth token for placeholder publish.
               npm: creates a temporary .npmrc for authentication.
               pnpm: passed to pnpm through its environment only.
+              Unset it and use npm login for --github.* / --mfa.
 `);
   process.exit(0);
 }
@@ -120,6 +140,11 @@ function resolveNpmCommand(args) {
   return { command: 'npm', args };
 }
 
+function runNpm(args, options) {
+  const resolved = resolveNpmCommand(args);
+  return execFileSync(resolved.command, resolved.args, options);
+}
+
 // Follow the package manager that launched this CLI. `pnpm dlx` and `pnpx` set npm_config_user_agent to `pnpm/<version> ...`.
 // npx, a global install, other package managers, or a missing user agent keep using npm.
 // npm_execpath is not used to decide: pnpm 10 does not set it for `pnpm dlx`.
@@ -151,6 +176,81 @@ function resolvePnpmCommand(args) {
     }
   }
   return { command: 'pnpm', args };
+}
+
+const configureGitHub = Object.keys(values).some(key => key.startsWith('github.'));
+const configureSettings = configureGitHub || values.mfa !== undefined;
+
+function fail(message) {
+  console.error(`Error: ${message}`);
+  process.exit(1);
+}
+
+if (values.mfa !== undefined && !['none', 'publish', 'automation'].includes(values.mfa)) {
+  fail('--mfa must be one of: none, publish, automation');
+}
+if (configureGitHub) {
+  if (!values['github.repo'] || !values['github.file']) {
+    fail('--github.repo and --github.file are required for GitHub Actions');
+  }
+  if (!/^[^/\s]+\/[^/\s]+$/.test(values['github.repo'])) {
+    fail('--github.repo must be in owner/repo format');
+  }
+  if (!/^[^/\\]+\.ya?ml$/.test(values['github.file'])) {
+    fail('--github.file must be a workflow filename ending in .yml or .yaml, without a path');
+  }
+}
+if (configureSettings && process.env.NPM_TOKEN && !values['dry-run']) {
+  fail('NPM_TOKEN overrides local login for publishing. Unset NPM_TOKEN and run npm login --registry ' + values.registry + ' before configuring package settings.');
+}
+
+const trustArgs = ['trust', 'github', packageName,
+  '--repo', values['github.repo'], '--file', values['github.file'], '--allow-publish', '--yes'];
+if (values['github.env']) {
+  trustArgs.push('--env', values['github.env']);
+}
+const mfaArgs = ['access', 'set', `mfa=${values.mfa}`, packageName];
+for (const args of [trustArgs, mfaArgs]) {
+  args.push('--registry', values.registry);
+}
+
+// Never probe or mutate the registry while previewing interactive setup.
+if (configureSettings && values['dry-run']) {
+  console.log(`Dry run: publish a placeholder for ${packageName} only if it does not exist.`);
+  console.log(`Registry: ${values.registry}`);
+  if (configureGitHub) console.log(`Then run: npm ${trustArgs.join(' ')}`);
+  if (values.mfa !== undefined) console.log(`Then run: npm ${mfaArgs.join(' ')}`);
+  console.log('Use npm login before setup, complete the 2FA prompts, then npm logout.');
+  process.exit(0);
+}
+
+function packageExists() {
+  try {
+    runNpm(['view', packageName, 'name', '--json', '--registry', values.registry], { stdio: 'pipe' });
+    return true;
+  } catch (error) {
+    // Auth and connection failures must not be mistaken for a new package.
+    try {
+      if (JSON.parse(error.stdout?.toString()).error?.code === 'E404') return false;
+    } catch {}
+    throw new Error('Could not check whether the package exists; no package was published. Check authentication and registry connectivity.');
+  }
+}
+
+if (configureSettings) {
+  try {
+    if (configureGitHub) {
+      const version = runNpm(['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
+      const [major, minor] = version.split('.').map(Number);
+      if (!(major > 11 || (major === 11 && minor >= 15))) {
+        fail(`GitHub configuration requires npm >= 11.15.0 (current: ${version})`);
+      }
+    }
+    // This verifies authentication, not the token's type or permissions.
+    runNpm(['whoami', '--registry', values.registry], { stdio: ['inherit', 'ignore', 'inherit'] });
+  } catch {
+    fail(`Authentication check failed. Run npm login --registry ${values.registry} and retry.`);
+  }
 }
 
 // Publish a placeholder package to reserve the name
@@ -272,10 +372,26 @@ For more details about npm's trusted publishing feature, see:
 
     try {
       const publishCommand = packageManager === 'pnpm' ? resolvePnpmCommand(publishArgs) : resolveNpmCommand(publishArgs);
-      execFileSync(publishCommand.command, publishCommand.args, {
-        cwd: pkgDir,
-        env: publishEnv,
-        stdio: ['inherit', 'inherit', 'pipe']
+      // Keep npm's browser/2FA instructions visible while retaining stderr
+      // for the already-published-version check below.
+      await new Promise((resolve, reject) => {
+        const child = spawn(publishCommand.command, publishCommand.args, {
+          cwd: pkgDir,
+          env: publishEnv,
+          stdio: ['inherit', 'inherit', 'pipe']
+        });
+        let stderr = '';
+        child.stderr.on('data', chunk => {
+          stderr += chunk;
+          process.stderr.write(chunk);
+        });
+        child.on('error', reject);
+        child.on('close', (code, signal) => {
+          if (code === 0) return resolve();
+          const error = new Error(`${packageManager} publish failed (${signal || code})`);
+          error.stderr = stderr;
+          reject(error);
+        });
       });
       console.log(`\n✅ Successfully published: ${pkgName}`);
     } catch (publishError) {
@@ -284,7 +400,6 @@ For more details about npm's trusted publishing feature, see:
         throw new Error(`${packageManager} was not found. This CLI was launched by ${packageManager}, so it publishes with ${packageManager}. Install ${packageManager}, or run this CLI with ${packageManager === 'pnpm' ? 'npx to publish with npm' : 'pnpm dlx to publish with pnpm'}.`);
       }
       const stderr = publishError.stderr?.toString() ?? '';
-      process.stderr.write(stderr);
       // pnpm 12 wraps long error lines with box-drawing characters, so compare with whitespace collapsed.
       if (stderr.replace(/[\s│]+/g, ' ').includes('cannot publish over the previously published versions')) {
         console.log(`\nℹ️  Package "${pkgName}" version ${opts.packageVersion} was previously published (and possibly unpublished). Skipping placeholder publish.`);
@@ -304,27 +419,54 @@ For more details about npm's trusted publishing feature, see:
   }
 }
 
-// Publish placeholder package and guide manual OIDC setup
-const packageManager = detectPackageManager();
+// Interactive settings use the npm login session for publishing as well.
+const packageManager = configureSettings ? 'npm' : detectPackageManager();
 console.log(`🧰 Package manager: ${packageManager}`);
+// Existing packages can be configured without publishing another version.
+let completedStep = 'No changes completed';
 try {
-  await publishPlaceholder(packageName, {
-    packageManager,
-    registry: values.registry,
-    access: values.access,
-    dryRun: values['dry-run'],
-    packageVersion: values['package-version']
-  });
+  if (configureSettings && packageExists()) {
+    console.log(`📦 Package already exists: ${packageName}. Skipping placeholder publish.`);
+    completedStep = 'Existing package found';
+  } else {
+    await publishPlaceholder(packageName, {
+      packageManager,
+      registry: values.registry,
+      access: values.access,
+      dryRun: values['dry-run'],
+      packageVersion: values['package-version']
+    });
+    completedStep = 'Placeholder publish step completed';
+  }
+  if (configureGitHub) {
+    console.log(`\n🔗 Configuring GitHub Actions trusted publishing for: ${packageName}`);
+    runNpm(trustArgs, { stdio: 'inherit' });
+    completedStep = 'Trusted Publisher configured';
+    console.log(`✅ ${completedStep}`);
+  }
+  if (values.mfa !== undefined) {
+    console.log(`\n🔒 Setting MFA requirement to "${values.mfa}" for: ${packageName}`);
+    runNpm(mfaArgs, { stdio: 'inherit' });
+    completedStep = `MFA requirement set to "${values.mfa}"`;
+    console.log(`✅ ${completedStep}`);
+  }
 } catch (error) {
-  console.error(`\n❌ Failed to publish placeholder package`);
+  console.error(`\n❌ ${configureSettings ? 'Package setup failed' : 'Failed to publish placeholder package'}`);
   console.error(`Error: ${error.message}`);
+  if (configureSettings) {
+    console.error(`Last completed step: ${completedStep}. Earlier changes have not been rolled back.`);
+    console.error(`Package settings require interactive authentication. Run npm login --registry ${values.registry} and retry, completing the 2FA prompts.`);
+    console.error(`When finished: npm logout --registry ${values.registry}`);
+  }
   process.exit(1);
 }
 
 if (!values['dry-run']) {
   console.log(`\n🔗 View your package at: https://www.npmjs.com/package/${packageName}`);
   console.log(`\nNext steps:`);
-  console.log(`1. Go to https://www.npmjs.com/package/${packageName}/access`);
-  console.log(`2. Configure OIDC trusted publishing`);
-  console.log(`3. Set up your CI/CD workflow to publish with OIDC`);
+  if (!configureGitHub) {
+    console.log(`Configure OIDC trusted publishing at https://www.npmjs.com/package/${packageName}/access`);
+  }
+  console.log(`Set up your CI/CD workflow to publish with OIDC`);
+  if (configureSettings) console.log(`When finished: npm logout --registry ${values.registry}`);
 }

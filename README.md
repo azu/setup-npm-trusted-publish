@@ -2,7 +2,7 @@
 
 A tool to setup OIDC (OpenID Connect) trusted publishing for npm packages.
 
-It publishes a minimal placeholder package so you can configure OIDC trusted publishing on npmjs.com afterwards.
+It publishes a minimal placeholder package and can configure GitHub Actions trusted publishing and publishing MFA after an interactive `npm login`.
 
 ## Background
 
@@ -42,6 +42,10 @@ Options:
 - `--access <public|restricted>` - Access level for scoped packages (default: public)
 - `--registry <url>` - npm registry URL (default: `https://registry.npmjs.org`)
 - `--package-version <version>` - Version for the placeholder package (default: `0.0.0`)
+- `--mfa <none|automation|publish>` - Set publishing MFA after publishing. `publish` requires 2FA and disallows access tokens while allowing OIDC trusted publishing. `automation` allows tokens with bypass 2FA.
+- `--github.repo <owner/repo>` - GitHub repository allowed to publish (requires `--github.file`)
+- `--github.file <workflow.yml>` - Workflow filename inside `.github/workflows` (requires `--github.repo`)
+- `--github.env <environment>` - GitHub Actions environment, if the publishing job uses one
 
 Environment Variables:
 - `NPM_TOKEN` - npm authentication token for users who don't have npm login configured locally. The token is never written to disk.
@@ -58,7 +62,42 @@ setup-npm-trusted-publish my-package --registry https://npm.example.com
 setup-npm-trusted-publish my-package --package-version 0.0.1
 ```
 
-After publishing, configure OIDC trusted publishing and publishing MFA requirement (`mfa=automation` / `mfa=publish`) on npmjs.com under `https://www.npmjs.com/package/<package-name>/access`. Both `npm trust` and `npm access set mfa=...` require interactive 2FA OTP and cannot be driven by `NPM_TOKEN` (see "Why not use `npm trust` or `npm access set mfa=...`?" below for details), so they are intentionally not part of this CLI.
+Without `--github.*` or `--mfa`, configure trusted publishing and publishing MFA on npmjs.com under `https://www.npmjs.com/package/<package-name>/access` after publishing.
+
+## Complete example with local npm login
+
+Use this flow to complete setup without creating a Granular Access Token. GitHub configuration requires npm **11.15.0 or later** and account-level 2FA, as described in the [npm trust prerequisites](https://docs.npmjs.com/cli/v11/commands/npm-trust/).
+
+Replace `@myorg/my-package` and `myorg/my-repo` with your package and repository. `release.yml` is the filename of the publishing workflow in `.github/workflows`; add `--github.env <environment>` if its job uses a GitHub Actions environment.
+
+```bash
+# 1. Use a local login session for this setup.
+# This tool gives NPM_TOKEN precedence over local login when publishing.
+unset NPM_TOKEN
+npm login --registry https://registry.npmjs.org
+
+# 2. Publish a placeholder if needed, configure Trusted Publisher, and set MFA.
+npx --registry https://registry.npmjs.org setup-npm-trusted-publish @myorg/my-package \
+  --github.repo myorg/my-repo \
+  --github.file release.yml \
+  --mfa publish
+
+# 3. Confirm the Trusted Publisher configuration.
+npm trust list @myorg/my-package --registry https://registry.npmjs.org
+
+# 4. End the login session when finished.
+npm logout --registry https://registry.npmjs.org
+```
+
+Complete the browser authentication and 2FA prompts shown by npm. The tool runs `npm trust github` with `--allow-publish`, then [`npm access set mfa=publish`](https://docs.npmjs.com/cli/v11/commands/npm-access/). `mfa=publish` disallows access-token publishing; your configured OIDC workflow can still publish. Check the package's **Publishing access** setting on npmjs.com to confirm MFA.
+
+Existing packages skip the placeholder publish. Completed changes remain in place when another step fails. If Trusted Publisher setup succeeds but MFA fails, retry with `--mfa publish` alone to avoid creating the same trust configuration again. Run [`npm logout`](https://docs.npmjs.com/cli/v11/commands/npm-logout/) even if you stop setup partway through; it invalidates the session token. Configure your CI workflow to publish the actual package with OIDC and replace the placeholder version.
+
+To configure MFA separately after publishing:
+
+```bash
+npm access set mfa=publish @myorg/my-package --registry https://registry.npmjs.org
+```
 
 ## Package manager
 
@@ -71,6 +110,8 @@ The placeholder is published with the package manager that launched this CLI:
 
 The launcher is detected from the `npm_config_user_agent` environment variable (`pnpm/...` means pnpm). Your project's lockfile or `packageManager` field is not used, because the CLI publishes a placeholder from a temporary directory, not your project.
 
+With `--github.*` or `--mfa`, publishing and settings commands always use npm and the credentials from `npm login`. pnpm's login credentials cannot be used for `npm trust` or `npm access`.
+
 This matters for authentication: since pnpm 11, `pnpm login` saves the token in pnpm's own config (`<pnpm config>/auth.ini`, or the global `config.yaml` since pnpm 12.1) instead of `~/.npmrc`, so npm cannot use it. Running this CLI with `pnpm dlx` publishes with the credentials from `pnpm login`. See [pnpm login](https://pnpm.io/cli/login) and [.npmrc & Authentication](https://pnpm.io/npmrc).
 
 If publishing fails, the CLI does not retry with the other package manager, since it would use different credentials.
@@ -79,12 +120,13 @@ Known limitation: with pnpm 11, a "cannot publish over the previously published 
 
 ## Usage without local npm login
 
-If you don't have npm login configured locally, you can use a one-time Granular Access Token:
+For a placeholder-only publish without local login, you can use a one-time Granular Access Token. To also configure MFA and Trusted Publisher from this tool, use the local login flow above.
 
 1. Go to https://www.npmjs.com/settings/{user}/tokens and create a new **Granular Access Token**
 2. Configure the token:
    - **Packages and scopes**: Read and write (select the target scope if publishing a scoped package)
-   - **Expiration**: 7 days (shortest available, since this is one-time use)
+   - **Bypass 2FA**: Enabled for a non-interactive publish
+   - **Expiration**: Choose a short expiration for this one-time use
 3. Publish using the token:
    ```bash
    read -s NPM_TOKEN && export NPM_TOKEN && setup-npm-trusted-publish @myorg/my-package
@@ -106,23 +148,21 @@ The generated README explicitly indicates:
 - It exists **ONLY** for OIDC configuration
 - It should **NOT** be used as a dependency
 
-## Why not use `npm trust` or `npm access set mfa=...`?
+## Authentication for package settings
 
-npm 11.10.0+ provides an `npm trust` command that can configure trusted publishing without publishing a placeholder. However, it has a significant limitation that makes it unsuitable for this tool's automation use case:
+Publishing a placeholder and changing package settings have different authentication requirements. npm's [Registry API documentation](https://api-docs.npmjs.com/) says that bypass-2FA Granular Access Tokens cannot change package access or Trusted Publisher settings. `npm login` provides a session for interactive authentication.
 
-> Granular Access Tokens (GAT) with the bypass 2FA option are not supported. Legacy basic auth (username and password) credentials will not work for trust commands or endpoints. Two-factor authentication must be enabled at the account level.
->
-> — [npm-trust documentation](https://docs.npmjs.com/cli/v11/commands/npm-trust)
+When `--github.*` or `--mfa` is specified, this tool requires `NPM_TOKEN` to be unset, verifies authentication with `npm whoami`, and lets npm handle authentication challenges. `whoami` confirms the identity, not the token type or its permission to change settings. A Granular Access Token saved in `.npmrc` may still fail at the settings step; run `npm login` again to replace it with a session. The tool does not infer token type from its prefix.
 
-`npm access set mfa=publish|automation` falls back to the same web auth flow and rejects token-based execution with `401 token is invalid` ([npm/cli#9268](https://github.com/npm/cli/issues/9268), [#8869](https://github.com/npm/cli/issues/8869)).
-
-In short, both commands require interactive 2FA OTP and cannot be driven by `NPM_TOKEN` (automation token / GAT with bypass 2FA). For non-interactive setup flows that this CLI targets, the placeholder publish + manual web UI configuration is the only reliable path. If those commands work for you interactively, run them directly without this tool.
+For non-interactive use, publish the placeholder with `NPM_TOKEN`, then configure settings on npmjs.com. For interactive use, follow the complete local login example above.
 
 ## Workflow
 
-1. Run this tool to create and publish a placeholder package
-2. Visit the provided URL (`https://www.npmjs.com/package/<package-name>/access`) to configure OIDC trusted publishing
+1. Log in with `npm login`, then run this tool with `--github.repo`, `--github.file`, and `--mfa publish` to publish and configure the package
+2. Log out with `npm logout` after setup
 3. Set up your CI/CD workflow to publish the real package version with OIDC
+
+For the placeholder-only flow, use the provided package settings URL to configure trusted publishing manually.
 
 ## Example Output
 
@@ -137,14 +177,13 @@ $ setup-npm-trusted-publish @myorg/my-package
 
 ✅ Successfully published: @myorg/my-package
 
+🧹 Cleaned up temp directory
+
 🔗 View your package at: https://www.npmjs.com/package/@myorg/my-package
 
 Next steps:
-1. Go to https://www.npmjs.com/package/@myorg/my-package/access
-2. Configure OIDC trusted publishing
-3. Set up your CI/CD workflow to publish with OIDC
-
-🧹 Cleaned up temp directory
+Configure OIDC trusted publishing at https://www.npmjs.com/package/@myorg/my-package/access
+Set up your CI/CD workflow to publish with OIDC
 ```
 
 ## Why is this needed?
