@@ -72,7 +72,7 @@ Without `--github.*` or `--mfa`, configure trusted publishing and publishing MFA
 Run this from the repository that will publish the package:
 
 ```bash
-npx --registry https://registry.npmjs.org setup-npm-trusted-publish --interactive --ephemeral-auth
+npx setup-npm-trusted-publish --registry https://registry.npmjs.org --interactive --ephemeral-auth
 ```
 
 Use ↑/↓ to move between packages and Space to check or uncheck them. Select one or more packages, then press Enter. Type to filter by package name or manifest path; checked packages stay selected when hidden by the filter. Workflow selection also supports ↑/↓, typing to filter, and Enter to confirm. Matching is case-insensitive and supports partial matches. Backspace edits the search; Escape or Ctrl+C cancels setup. The CLI suggests the GitHub repository from the `origin` remote, falling back to `package.json`'s `repository` field, and lets you edit it. The terminal UI uses Node.js built-ins and has no UI dependencies.
@@ -119,7 +119,8 @@ unset NPM_TOKEN
 npm login --registry https://registry.npmjs.org
 
 # 2. Publish a placeholder if needed, configure Trusted Publisher, and set MFA.
-npx --registry https://registry.npmjs.org setup-npm-trusted-publish @myorg/my-package \
+npx setup-npm-trusted-publish @myorg/my-package \
+  --registry https://registry.npmjs.org \
   --github.repo myorg/my-repo \
   --github.file release.yml \
   --mfa publish

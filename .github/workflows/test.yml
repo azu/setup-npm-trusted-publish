@@ -33,11 +33,11 @@ jobs:
         with:
           node-version: 'lts/*'
 
-      # Exercise compatibility with the latest pnpm CLI, independent of runtime dependencies.
-      # jactionlint ignore=adhoc-packages
       - name: Install pnpm
-        run: npm install --global pnpm@latest && pnpm --version
-        shell: bash
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: latest
+          run_install: false
 
       # E2E tests run the real npm and pnpm CLIs against a local fake registry (127.0.0.1) inside an isolated HOME.
       # They never read real credentials and never publish to the real npm registry.
