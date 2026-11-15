@@ -2,7 +2,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile, readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 import { startFakeRegistry } from './helpers/fake-registry.js';
 import { createSandbox, run, cliPath, npmCommand, packCli, findFilesContaining } from './helpers/sandbox.js';
 
@@ -204,9 +204,9 @@ async function setupSettings(t) {
     assert.equal(result.code, 0, result.stderr);
     assert.match(await readFile(userconfig, 'utf8'), /_authToken=test-login-session/);
   };
-  const runInteractive = (args = [], input = '') => run(process.execPath,
+  const runInteractive = (args = [], input = '', extraEnv = {}) => run(process.execPath,
     [cliPath, '--interactive', '--registry', registry, ...args], {
-      cwd: sandbox.dirs.work, env, input, timeout: 30000
+      cwd: sandbox.dirs.work, env: { ...env, ...extraEnv }, input, timeout: 30000
     });
   return { registry, state, userconfig, npm, setupPackage, login, sandbox, runInteractive };
 }
@@ -529,6 +529,40 @@ describe('package and workflow selection', () => {
 });
 
 describe('temporary npm authentication', () => {
+  for (const mode of ['explicit', 'interactive', 'batch']) {
+    test(`rejects unsupported npm before login in ${mode} setup`, async t => {
+      const ctx = await setupSettings(t);
+      const bin = join(ctx.sandbox.root, 'bin');
+      await mkdir(bin);
+      const calls = join(ctx.sandbox.root, 'npm-calls.jsonl');
+      // Only version detection is simulated; any auth invocation fails. The
+      // other E2E cases run real npm against the local registry.
+      const script = `require('node:fs').appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + '\\n');
+if (process.argv[2] === '--version') console.log('10.8.2');
+else process.exit(1);
+`;
+      const npmCli = join(bin, 'npm-cli.js');
+      await writeFile(npmCli, script);
+      await writeFile(join(bin, 'npm'), '#!/usr/bin/env node\n' + script, { mode: 0o755 });
+      const env = { PATH: bin + delimiter + ctx.sandbox.env.PATH, npm_execpath: npmCli };
+      let result;
+      if (mode === 'explicit') result = await ctx.setupPackage([...githubOptions, '--ephemeral-auth'], env);
+      else {
+        await createProject(ctx);
+        result = await ctx.runInteractive(['--ephemeral-auth'], interactiveKeys({
+          packageKeys: mode === 'batch' ? ' \x1b[B \r' : ' \r', confirm: true
+        }), env);
+      }
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /requires npm >= 11\.15\.0 \(current: 10\.8\.2\)/);
+      assert.match(result.stderr, /npm install -g npm@\^11\.15\.0/);
+      assert.doesNotMatch(result.stdout, /Logging in|Logging out|Failed package/);
+      assert.deepEqual((await readFile(calls, 'utf8')).trim().split('\n').map(line => JSON.parse(line)), [['--version']]);
+      assert.equal(ctx.state.requests.length, 0);
+      assert.deepEqual((await readdir(ctx.sandbox.dirs.tmp)).filter(name => name.startsWith('npm-setup-session-')), []);
+    });
+  }
+
   test('shares one temporary login session across selected packages', async t => {
     const ctx = await setupSettings(t);
     await createProject(ctx);

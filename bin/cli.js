@@ -147,6 +147,7 @@ async function runPackages(names, context = {}) {
 }
 
 async function dispatchPackages(names) {
+  assertNpmTrustVersion();
   if (values['ephemeral-auth'] && !values['dry-run']) {
     const { withEphemeralAuth } = await import('./session.js');
     return withEphemeralAuth({ registry: values.registry, npmCommand: resolveNpmCommand }, context => runPackages(names, context));
@@ -214,6 +215,22 @@ function resolveNpmCommand(args) {
 function runNpm(args, options) {
   const resolved = resolveNpmCommand(args);
   return execFileSync(resolved.command, resolved.args, options);
+}
+
+// Check local prerequisites before creating a temporary login session. Keep
+// this shared by batch dispatch and the ordinary single-package flow.
+function assertNpmTrustVersion() {
+  if (values['dry-run'] || !Object.keys(values).some(key => key.startsWith('github.'))) return;
+  let version;
+  try {
+    version = runNpm(['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
+  } catch {
+    throw new Error('Could not check npm version. Ensure npm >= 11.15.0 is installed and available on PATH.');
+  }
+  const [major, minor] = version.split('.').map(Number);
+  if (!(major > 11 || (major === 11 && minor >= 15))) {
+    throw new Error(`GitHub configuration requires npm >= 11.15.0 (current: ${version}). Update npm with npm install -g npm@^11.15.0 and retry.`);
+  }
 }
 
 // Follow the package manager that launched this CLI. `pnpm dlx` and `pnpx` set npm_config_user_agent to `pnpm/<version> ...`.
@@ -329,14 +346,9 @@ async function waitForPackage() {
 }
 
 if (configureSettings) {
+  try { assertNpmTrustVersion(); }
+  catch (error) { fail(error.message); }
   try {
-    if (configureGitHub) {
-      const version = runNpm(['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
-      const [major, minor] = version.split('.').map(Number);
-      if (!(major > 11 || (major === 11 && minor >= 15))) {
-        fail(`GitHub configuration requires npm >= 11.15.0 (current: ${version})`);
-      }
-    }
     // This verifies authentication, not the token's type or permissions.
     runNpm(['whoami', '--registry', values.registry], { stdio: ['inherit', 'ignore', 'inherit'] });
   } catch {

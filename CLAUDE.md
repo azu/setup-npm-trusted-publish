@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 CLI tool to set up OIDC trusted publishing for npm packages. It publishes a minimal placeholder package. With `--github.repo` / `--github.file` and/or `--mfa`, it configures package settings interactively after `npm login`; existing packages skip publishing. Without these flags, users configure settings on npmjs.com.
 
-`npm trust` requires npm >= 11.15.0 and account-level 2FA. Bypass-2FA Granular Access Tokens cannot change access/trust settings. For interactive setup, require `NPM_TOKEN` to be unset and use local npm login credentials with inherited stdio for npm authentication prompts. Do not infer token type from credential source or prefix; `npm whoami` only verifies identity. Non-interactive `NPM_TOKEN` use remains placeholder-only. Dry runs with settings flags must not contact or mutate the registry.
+`npm trust` requires npm >= 11.15.0 and account-level 2FA. Check the npm version before starting an ephemeral login session, including interactive and batch setup; unsupported versions must not contact the registry or create temporary credentials. Bypass-2FA Granular Access Tokens cannot change access/trust settings. For interactive setup, require `NPM_TOKEN` to be unset and use local npm login credentials with inherited stdio for npm authentication prompts. Do not infer token type from credential source or prefix; `npm whoami` only verifies identity. Non-interactive `NPM_TOKEN` use remains placeholder-only. Dry runs with settings flags must not contact or mutate the registry.
 
 ## Commands
 

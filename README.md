@@ -98,7 +98,7 @@ Workflows come from `.github/workflows/*.yml` and `*.yaml`. The CLI displays all
 
 All selected packages use the same repository, workflow, environment, and MFA policy. Packages are configured sequentially through the normal setup flow. If one fails, setup stops and lists completed packages, the failed package, and packages not attempted. The failed package may have completed earlier steps, as reported in its output; completed changes are retained.
 
-With `--ephemeral-auth`, login starts after confirmation. Complete npm's browser authentication and 2FA prompts; the tool uses one temporary session for all selected packages, then logs out. Without this flag, run `npm login` before setup and `npm logout` when finished, as shown below.
+With `--ephemeral-auth`, the tool checks the required npm version after confirmation and before login. Unsupported versions stop with an update command without creating a session. Complete npm's browser authentication and 2FA prompts; the tool uses one temporary session for all selected packages, then logs out. Without this flag, run `npm login` before setup and `npm logout` when finished, as shown below.
 
 ### Temporary login session
 
