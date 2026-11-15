@@ -6,6 +6,7 @@ import { basename, delimiter, dirname, join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const { values, positionals } = parseArgs({
   options: {
@@ -38,7 +39,8 @@ const { values, positionals } = parseArgs({
     mfa: { type: 'string' },
     'github.repo': { type: 'string' },
     'github.file': { type: 'string' },
-    'github.env': { type: 'string' }
+    'github.env': { type: 'string' },
+    'wait-timeout': { type: 'string', default: '300' }
   },
   allowPositionals: true
 });
@@ -68,6 +70,7 @@ Options:
   --github.repo            GitHub repository allowed to publish (owner/repo)
   --github.file            Workflow filename in .github/workflows (e.g. release.yml)
   --github.env             Required GitHub Actions environment (optional)
+  --wait-timeout           Seconds to wait for a published package before settings [default: 300]
 
 GitHub configuration requires npm >= 11.15.0 and grants npm publish permission.
 
@@ -180,6 +183,7 @@ function resolvePnpmCommand(args) {
 
 const configureGitHub = Object.keys(values).some(key => key.startsWith('github.'));
 const configureSettings = configureGitHub || values.mfa !== undefined;
+const waitTimeoutSeconds = Number(values['wait-timeout']);
 
 function fail(message) {
   console.error(`Error: ${message}`);
@@ -188,6 +192,9 @@ function fail(message) {
 
 if (values.mfa !== undefined && !['none', 'publish', 'automation'].includes(values.mfa)) {
   fail('--mfa must be one of: none, publish, automation');
+}
+if (!Number.isFinite(waitTimeoutSeconds) || waitTimeoutSeconds <= 0) {
+  fail('--wait-timeout must be a positive number of seconds');
 }
 if (configureGitHub) {
   if (!values['github.repo'] || !values['github.file']) {
@@ -224,17 +231,33 @@ if (configureSettings && values['dry-run']) {
   process.exit(0);
 }
 
-function packageExists() {
+function packageExists({ timeout } = {}) {
   try {
-    runNpm(['view', packageName, 'name', '--json', '--registry', values.registry], { stdio: 'pipe' });
+    runNpm(['view', packageName, 'name', '--json', '--prefer-online', '--registry', values.registry], { stdio: 'pipe', timeout });
     return true;
   } catch (error) {
     // Auth and connection failures must not be mistaken for a new package.
     try {
       if (JSON.parse(error.stdout?.toString()).error?.code === 'E404') return false;
     } catch {}
-    throw new Error('Could not check whether the package exists; no package was published. Check authentication and registry connectivity.');
+    throw new Error('Could not check whether the package exists. Check authentication and registry connectivity.', { cause: error });
   }
+}
+
+async function waitForPackage() {
+  console.log(`\n⏳ Waiting for ${packageName} to become available on the registry...`);
+  const deadline = Date.now() + waitTimeoutSeconds * 1000;
+  while (Date.now() < deadline) {
+    try {
+      if (packageExists({ timeout: Math.max(1, deadline - Date.now()) })) return;
+    } catch (error) {
+      if (error.cause?.code === 'ETIMEDOUT') break;
+      throw error;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await delay(Math.min(2000, remaining));
+  }
+  throw new Error(`Timed out after ${waitTimeoutSeconds}s waiting for ${packageName} to become available. The publish step completed; retry setup later without republishing the package.`);
 }
 
 if (configureSettings) {
@@ -437,6 +460,7 @@ try {
       packageVersion: values['package-version']
     });
     completedStep = 'Placeholder publish step completed';
+    if (configureSettings) await waitForPackage();
   }
   if (configureGitHub) {
     console.log(`\n🔗 Configuring GitHub Actions trusted publishing for: ${packageName}`);

@@ -8,17 +8,18 @@ import { gunzipSync } from 'node:zlib';
  * @param {object} [options]
  * @param {string} [options.token] - Bearer token that publish requests must carry. When omitted, any request is accepted.
  * @param {Record<string, string[]>} [options.published] - Versions that already exist, keyed by package name.
- * @param {boolean} [options.interactive] - Enable login sessions and package settings endpoints.
+ * @param {boolean} [options.settings] - Enable login sessions and package settings endpoints.
  * @param {string} [options.granularToken] - A publishing token that cannot change settings.
  */
-export async function startFakeRegistry({ token, published = {}, interactive = false, granularToken } = {}) {
+export async function startFakeRegistry({ token, published = {}, settings = false, granularToken } = {}) {
   const requests = [];
   const publishes = [];
   const packages = new Map(Object.entries(published).map(([name, versions]) => [name, new Set(versions)]));
   const state = {
     requests, packages: new Map(), sessions: new Set(),
     trust: [], mfa: null, denyTrust: false, denyMfa: false,
-    metadataError: null, denyPublish: false
+    metadataError: null, denyPublish: false,
+    visibilityDelayReads: 0, pendingVisibilityReads: 0
   };
 
   let baseUrl;
@@ -30,6 +31,7 @@ export async function startFakeRegistry({ token, published = {}, interactive = f
     requests.push(record);
 
     const send = (status, body) => {
+      record.status = status;
       res.writeHead(status, { 'content-type': 'application/json' });
       res.end(JSON.stringify(body));
     };
@@ -37,9 +39,9 @@ export async function startFakeRegistry({ token, published = {}, interactive = f
     const credential = req.headers.authorization?.replace(/^Bearer /, '');
     const auth = state.sessions.has(credential) ? 'session'
       : granularToken !== undefined && credential === granularToken ? 'granular' : 'none';
-    const authorized = interactive ? auth !== 'none'
+    const authorized = settings ? auth !== 'none'
       : token === undefined || credential === token;
-    if (interactive) {
+    if (settings) {
       record.path = pathname.startsWith('/-/user/token/') ? '/-/user/token/[redacted]' : decodeURIComponent(pathname);
       record.auth = auth;
       record.body = rawBody ? JSON.parse(rawBody) : undefined;
@@ -49,13 +51,13 @@ export async function startFakeRegistry({ token, published = {}, interactive = f
       return send(200, { loginUrl: `${baseUrl}-/fake-login`, doneUrl: `${baseUrl}-/v1/done` });
     }
     if (req.method === 'GET' && pathname === '/-/v1/done') {
-      if (interactive && token !== undefined) state.sessions.add(token);
+      if (settings && token !== undefined) state.sessions.add(token);
       return token === undefined ? send(404, { error: 'Not found' }) : send(200, { token });
     }
     if (pathname === '/-/whoami') {
       return authorized && token !== undefined ? send(200, { username: 'fake-user' }) : send(401, { error: 'Unauthorized' });
     }
-    if (interactive) {
+    if (settings) {
       if (!authorized) return send(401, { error: 'Authentication required' });
       if (pathname.startsWith('/-/user/token/') && req.method === 'DELETE') {
         state.sessions.delete(credential);
@@ -63,12 +65,14 @@ export async function startFakeRegistry({ token, published = {}, interactive = f
       }
       if (pathname.endsWith('/trust')) {
         if (req.method === 'GET') return send(200, state.trust);
+        if (state.pendingVisibilityReads > 0) return send(404, { error: 'Package not yet available' });
         if (auth !== 'session' || state.denyTrust) return send(403, { error: 'Interactive authentication required' });
         if (state.trust.length) return send(409, { error: 'Trust already configured' });
         state.trust = record.body.map(config => ({ ...config, id: 'test-trust-id' }));
         return send(200, state.trust);
       }
       if (pathname.endsWith('/access') && req.method === 'POST') {
+        if (state.pendingVisibilityReads > 0) return send(404, { error: 'Package not yet available' });
         if (auth !== 'session' || state.denyMfa) return send(403, { error: 'Interactive authentication required' });
         state.mfa = record.body;
         return send(200, { ok: true });
@@ -102,11 +106,18 @@ export async function startFakeRegistry({ token, published = {}, interactive = f
       publishes.push({ name, body, headers: req.headers, attachments });
       for (const version of versions) existing.add(version);
       packages.set(name, existing);
-      if (interactive) state.packages.set(name, body);
+      if (settings) {
+        state.packages.set(name, body);
+        state.pendingVisibilityReads = state.visibilityDelayReads;
+      }
       return send(200, { ok: true, success: true });
     }
 
-    if (req.method === 'GET' && interactive && state.packages.has(name)) {
+    if (req.method === 'GET' && settings && state.packages.has(name)) {
+      if (state.pendingVisibilityReads > 0) {
+        state.pendingVisibilityReads--;
+        return send(404, { error: 'Package not yet available' });
+      }
       return send(200, state.packages.get(name));
     }
     if (req.method === 'GET' && packages.has(name)) {

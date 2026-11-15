@@ -46,6 +46,7 @@ Options:
 - `--github.repo <owner/repo>` - GitHub repository allowed to publish (requires `--github.file`)
 - `--github.file <workflow.yml>` - Workflow filename inside `.github/workflows` (requires `--github.repo`)
 - `--github.env <environment>` - GitHub Actions environment, if the publishing job uses one
+- `--wait-timeout <seconds>` - After publishing, wait up to this many seconds for the package to become available before configuring settings (default: `300`)
 
 Environment Variables:
 - `NPM_TOKEN` - npm authentication token for users who don't have npm login configured locally. The token is never written to disk.
@@ -92,6 +93,8 @@ npm logout --registry https://registry.npmjs.org
 Complete the browser authentication and 2FA prompts shown by npm. The tool runs `npm trust github` with `--allow-publish`, then [`npm access set mfa=publish`](https://docs.npmjs.com/cli/v11/commands/npm-access/). `mfa=publish` disallows access-token publishing; your configured OIDC workflow can still publish. Check the package's **Publishing access** setting on npmjs.com to confirm MFA.
 
 Existing packages skip the placeholder publish. Completed changes remain in place when another step fails. If Trusted Publisher setup succeeds but MFA fails, retry with `--mfa publish` alone to avoid creating the same trust configuration again. Run [`npm logout`](https://docs.npmjs.com/cli/v11/commands/npm-logout/) even if you stop setup partway through; it invalidates the session token. Configure your CI workflow to publish the actual package with OIDC and replace the placeholder version.
+
+After a placeholder publish, the tool polls `npm view --prefer-online` every two seconds until the registry serves the package, for up to five minutes by default. Use `--wait-timeout <seconds>` to change the limit. If the wait times out, the tool stops before changing trust or MFA settings and reports that the publish step has already completed.
 
 To configure MFA separately after publishing:
 
