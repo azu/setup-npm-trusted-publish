@@ -40,7 +40,7 @@ Package manager: `detectPackageManager()` picks pnpm when `npm_config_user_agent
 
 Interactive settings flags always select npm for both publishing and settings so that the entire setup uses the credentials from `npm login`. Use `resolveNpmCommand` for all npm subprocesses to preserve Windows support.
 
-Authentication: When `NPM_TOKEN` env var is set, with npm it creates a temporary `.npmrc` inside the package temp dir and passes it via `--userconfig` to `npm publish`. The `.npmrc` is cleaned up with the temp dir. With pnpm, the token is passed via `pnpm_config_//<host>/:_authToken` and `npm_config_//<host>/:_authToken` env vars of the `pnpm publish` child process (pnpm 11+ ignores `${...}` in a project `.npmrc` and has no `--userconfig`).
+Authentication: When `NPM_TOKEN` env var is set, with npm it creates a temporary `.npmrc` inside the package temp dir and passes it via `--userconfig` to `npm publish`. The `.npmrc` is cleaned up with the temp dir. With pnpm, the same `.npmrc` is passed via the `npm_config_userconfig` env var of the `pnpm publish` child process (pnpm 11+ ignores `${...}` in a project `.npmrc` and has no `--userconfig`; pnpm 10 reads it as the project `.npmrc`). Do not pass auth through env vars named `pnpm_config_//<host>/:_authToken`: dash drops names that are not shell identifiers, so they are lost when pnpm runs through a `#!/bin/sh` shim (pnpm self-update, pnpm/action-setup).
 
 ## Registry
 
