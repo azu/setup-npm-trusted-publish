@@ -2,10 +2,11 @@
 // pnpm must be on PATH; the pnpm tests are skipped otherwise.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startFakeRegistry } from './helpers/fake-registry.js';
 import { createSandbox, run, cliPath, npmCommand, pnpmCommand, packCli, findFilesContaining } from './helpers/sandbox.js';
+import { createProject, interactiveKeys } from './helpers/interactive.js';
 
 const TOKEN = 'dummy-token-for-e2e-0123456789';
 const pnpm = pnpmCommand([]);
@@ -23,9 +24,9 @@ async function setup(t, registryOptions = { token: TOKEN }) {
       env: { ...sandbox.env, ...extraEnv },
       cwd: sandbox.dirs.work
     });
-  const runPnpm = (args, extraEnv = {}) => {
+  const runPnpm = (args, extraEnv = {}, options = {}) => {
     const command = pnpmCommand(args);
-    return run(command.command, command.args, { env: { ...sandbox.env, ...extraEnv }, cwd: sandbox.dirs.work });
+    return run(command.command, command.args, { env: { ...sandbox.env, ...extraEnv }, cwd: sandbox.dirs.work, ...options });
   };
   return { registry, sandbox, runCli, runPnpm };
 }
@@ -117,7 +118,59 @@ describe('launched with pnpm dlx', { skip: !pnpm && 'pnpm is not installed' }, (
   });
   after(() => packSandbox.cleanup());
 
-  const dlx = (runPnpm, args, env) => runPnpm(['dlx', tarball, ...args], env);
+  const dlx = (runPnpm, args, env, options) => runPnpm(['dlx', tarball, ...args], env, options);
+
+  for (const denyTrust of [false, true]) {
+    test(`interactive temporary npm session ${denyTrust ? 'logs out after a settings failure' : 'configures selected packages and logs out'}`, async t => {
+      const ctx = await setup(t, { token: TOKEN, settings: true });
+      const { registry, sandbox, runPnpm } = ctx;
+      await createProject(ctx, 'pnpm');
+      await writeFile(join(sandbox.dirs.work, '.github', 'workflows', 'release.yml'), 'jobs:\n  publish:\n    environment: npm\n');
+      registry.state.denyTrust = denyTrust;
+      const result = await dlx(runPnpm, [
+        '--interactive', '--ephemeral-auth', '--registry', registry.url
+      ], { npm_config_browser: 'false', npm_config_fetch_retries: '0' }, {
+        input: interactiveKeys({ packageKeys: ' \x1b[B \r', confirm: true })
+      });
+
+      assert.equal(result.code, denyTrust ? 1 : 0, `${result.stdout}\n${result.stderr}`);
+      assert.equal(registry.state.requests.filter(req => req.method === 'POST' && req.path === '/-/v1/login').length, 1);
+      assert.equal(registry.state.requests.filter(req => req.method === 'DELETE').length, 1);
+      assert.equal(registry.state.sessions.size, 0);
+      assert.equal(await readFile(sandbox.userconfig, 'utf8'), '');
+      assert.deepEqual((await readdir(sandbox.dirs.tmp)).filter(name => name.startsWith('npm-setup-session-')), []);
+      assert.match(result.stdout, /Temporary npm authentication cleaned up/);
+      // Settings always use npm credentials, including when pnpm launches the CLI.
+      assert.match(result.stdout, /Package manager: npm\n/);
+      assertSentBy(registry, 'npm');
+      if (denyTrust) {
+        assert.match(result.stderr, /Failed package: @test\/alpha/);
+        assert.match(result.stderr, /Not attempted: @test\/beta/);
+        assert.equal(registry.state.trustByPackage.size, 0);
+      } else {
+        assert.deepEqual([...registry.state.packages.keys()], ['@test/alpha', '@test/beta']);
+        for (const name of ['@test/alpha', '@test/beta']) {
+          assert.equal(registry.state.trustByPackage.get(name)[0].claims.environment, 'npm');
+          assert.equal(registry.state.mfaByPackage.get(name).publish_requires_tfa, true);
+        }
+      }
+    });
+  }
+
+  for (const preview of [true, false]) {
+    test(`interactive ${preview ? 'dry-run' : 'cancellation'} does not create a temporary session`, async t => {
+      const ctx = await setup(t, { token: TOKEN, settings: true });
+      const { registry, runPnpm } = ctx;
+      await createProject(ctx, 'pnpm');
+      const result = await dlx(runPnpm, [
+        '--interactive', '--ephemeral-auth', '--registry', registry.url, ...(preview ? ['--dry-run'] : [])
+      ], {}, { input: interactiveKeys({ confirm: preview ? undefined : false }) });
+      assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual(registry.requests, []);
+      assert.doesNotMatch(result.stdout, /Logging in|Logging out/);
+      assert.match(result.stdout, preview ? /Then run: npm trust github/ : /Setup cancelled/);
+    });
+  }
 
   test('publishes the placeholder with pnpm and NPM_TOKEN', async (t) => {
     const { registry, sandbox, runPnpm } = await setup(t);

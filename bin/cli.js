@@ -331,16 +331,25 @@ function packageExists({ timeout } = {}) {
 
 async function waitForPackage() {
   console.log(`\n⏳ Waiting for ${packageName} to become available on the registry...`);
-  const deadline = Date.now() + waitTimeoutSeconds * 1000;
+  console.log(`No input needed. Retrying automatically every 10s for up to ${waitTimeoutSeconds}s; setup continues when the package is available. Ctrl+C to cancel.`);
+  const started = Date.now();
+  const deadline = started + waitTimeoutSeconds * 1000;
   while (Date.now() < deadline) {
     try {
-      if (packageExists({ timeout: Math.max(1, deadline - Date.now()) })) return;
+      if (packageExists({ timeout: Math.max(1, deadline - Date.now()) })) {
+        console.log('Package is available. Continuing trusted publishing setup...');
+        return;
+      }
     } catch (error) {
       if (error.cause?.code === 'ETIMEDOUT') break;
       throw error;
     }
     const remaining = deadline - Date.now();
-    if (remaining > 0) await delay(Math.min(2000, remaining));
+    if (remaining > 0) {
+      const retryMs = Math.min(10000, remaining);
+      console.log(`Still waiting (${Math.floor((Date.now() - started) / 1000)}s elapsed / ${waitTimeoutSeconds}s limit). Retrying automatically in ${Math.ceil(retryMs / 1000)}s...`);
+      await delay(retryMs);
+    }
   }
   throw new Error(`Timed out after ${waitTimeoutSeconds}s waiting for ${packageName} to become available. The publish step completed; retry setup later without republishing the package.`);
 }

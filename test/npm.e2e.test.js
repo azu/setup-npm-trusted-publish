@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile, readdir, stat } from 'node:fs/promises';
 import { join, delimiter } from 'node:path';
 import { startFakeRegistry } from './helpers/fake-registry.js';
 import { createSandbox, run, cliPath, npmCommand, packCli, findFilesContaining } from './helpers/sandbox.js';
+import { createProject, interactiveKeys } from './helpers/interactive.js';
 
 const TOKEN = 'dummy-token-for-e2e-0123456789';
 
@@ -213,51 +214,6 @@ async function setupSettings(t) {
 
 function succeeded(result) {
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
-}
-
-// Send real keyboard events after each prompt has rendered. No prompt answers
-// are injected into the application or its UI library.
-function interactiveKeys({ packageKeys = ' \r', workflowKeys = '\x1b[B\r', environment = '', confirm } = {}) {
-  const steps = [
-    { waitFor: /(?:◯|\( \))\s+@test\//, keys: packageKeys },
-    { waitFor: 'GitHub repository (owner/repo)', keys: '\r' },
-    { waitFor: /[❯>]\s+checks\.yml/, keys: workflowKeys },
-    { waitFor: 'GitHub Actions environment (leave empty if unused)', keys: `${environment}\r` }
-  ];
-  if (confirm !== undefined) steps.push({ waitFor: 'Publish a placeholder if needed and apply these settings?', keys: confirm ? 'y' : 'n' });
-  return steps;
-}
-
-async function createProject(ctx, type = 'npm') {
-  const root = ctx.sandbox.dirs.work;
-  const manifest = { name: 'workspace-root', private: true };
-  if (type === 'npm') manifest.workspaces = ['packages/*'];
-  if (type === 'yarn') manifest.workspaces = { packages: ['packages/*'] };
-  if (type === 'single') {
-    manifest.name = '@test/single';
-    manifest.private = false;
-    manifest.repository = 'https://github.com/example/project.git';
-  }
-  await writeFile(join(root, 'package.json'), JSON.stringify(manifest));
-  if (type === 'pnpm') await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
-  if (type === 'lerna') await writeFile(join(root, 'lerna.json'), JSON.stringify({ packages: ['packages/*'] }));
-  if (type !== 'single') {
-    for (const name of ['alpha', 'beta', 'private']) {
-      const directory = join(root, 'packages', name);
-      await mkdir(directory, { recursive: true });
-      await writeFile(join(directory, 'package.json'), JSON.stringify({ name: `@test/${name}`, private: name === 'private' }));
-    }
-    // This package is not in a workspace and must not be offered.
-    await mkdir(join(root, 'fixtures'), { recursive: true });
-    await writeFile(join(root, 'fixtures', 'package.json'), JSON.stringify({ name: '@test/fixture' }));
-  }
-  await mkdir(join(root, '.github', 'workflows'), { recursive: true });
-  for (const file of ['checks.yml', 'release.yml']) {
-    await writeFile(join(root, '.github', 'workflows', file), 'name: Test\non: workflow_dispatch\n');
-  }
-  succeeded(await run('git', ['init', '--quiet'], { cwd: root, env: ctx.sandbox.env }));
-  succeeded(await run('git', ['remote', 'add', 'origin', 'git@github.com:example/project.git'], { cwd: root, env: ctx.sandbox.env }));
-  return root;
 }
 
 describe('package and workflow selection', () => {
@@ -645,15 +601,19 @@ else process.exit(1);
 });
 
 describe('trusted publishing and MFA via npm login', () => {
-  test('waits for registry visibility before configuring trust and MFA', { timeout: 30000 }, async t => {
+  test('waits automatically with progress before configuring trust and MFA', { timeout: 30000 }, async t => {
     const ctx = await setupSettings(t);
     await ctx.login();
-    ctx.state.visibilityDelayReads = 2;
-    succeeded(await ctx.setupPackage([...githubOptions, '--mfa', 'publish', '--wait-timeout', '15']));
+    ctx.state.visibilityDelayReads = 1;
+    const result = await ctx.setupPackage([...githubOptions, '--mfa', 'publish', '--wait-timeout', '20']);
+    succeeded(result);
+    assert.match(result.stdout, /No input needed\. Retrying automatically every 10s for up to 20s/);
+    assert.match(result.stdout, /Still waiting \(\d+s elapsed \/ 20s limit\)\. Retrying automatically in 10s/);
+    assert.match(result.stdout, /Package is available\. Continuing trusted publishing setup/);
     const publishIndex = ctx.state.requests.findIndex(req => req.method === 'PUT');
     const trustIndex = ctx.state.requests.findIndex(req => req.method === 'POST' && req.path.endsWith('/trust'));
     const reads = ctx.state.requests.slice(publishIndex + 1, trustIndex).filter(req => req.method === 'GET');
-    assert.deepEqual(reads.map(req => req.status), [404, 404, 200]);
+    assert.deepEqual(reads.map(req => req.status), [404, 200]);
     assert.equal(ctx.state.requests.filter(req => req.method === 'PUT').length, 1);
     assert.equal(ctx.state.trust.length, 1);
     assert.equal(ctx.state.mfa.publish_requires_tfa, true);

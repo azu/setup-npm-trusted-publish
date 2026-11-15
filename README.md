@@ -135,7 +135,7 @@ Complete the browser authentication and 2FA prompts shown by npm. The tool runs 
 
 Existing packages skip the placeholder publish. Completed changes remain in place when another step fails. If Trusted Publisher setup succeeds but MFA fails, retry with `--mfa publish` alone to avoid creating the same trust configuration again. Run [`npm logout`](https://docs.npmjs.com/cli/v11/commands/npm-logout/) even if you stop setup partway through; it invalidates the session token. Configure your CI workflow to publish the actual package with OIDC and replace the placeholder version.
 
-After a placeholder publish, the tool polls `npm view --prefer-online` every two seconds until the registry serves the package, for up to five minutes by default. Use `--wait-timeout <seconds>` to change the limit. If the wait times out, the tool stops before changing trust or MFA settings and reports that the publish step has already completed.
+After a placeholder publish, the tool polls `npm view --prefer-online` every ten seconds until the registry serves the package, for up to five minutes by default. No input is needed: it displays the elapsed time and automatically continues once the package is available. Use `--wait-timeout <seconds>` to change the limit, or Ctrl+C to cancel. If the wait times out, the tool stops before changing trust or MFA settings and reports that the publish step has already completed.
 
 To configure MFA separately after publishing:
 
