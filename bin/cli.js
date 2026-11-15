@@ -7,6 +7,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
 const { values, positionals } = parseArgs({
   options: {
@@ -37,6 +38,8 @@ const { values, positionals } = parseArgs({
       default: '0.0.0'
     },
     mfa: { type: 'string' },
+    interactive: { type: 'boolean', short: 'i', default: false },
+    'ephemeral-auth': { type: 'boolean', default: false },
     'github.repo': { type: 'string' },
     'github.file': { type: 'string' },
     'github.env': { type: 'string' },
@@ -52,7 +55,7 @@ Usage: setup-npm-trusted-publish <package-name> [options]
 Publishes a minimal placeholder package to npm so you can configure OIDC
 trusted publishing on npmjs.com afterwards.
 With --github.* or --mfa, also configures package settings interactively.
-Run npm login first; account-level 2FA is required for npm trust.
+Run npm login first or use --ephemeral-auth; npm trust requires account-level 2FA.
 
 Arguments:
   <package-name>  The name of the npm package to setup (e.g. my-package, @scope/my-package)
@@ -67,6 +70,8 @@ Options:
   --mfa                    Set MFA requirement (none/automation/publish)
                            publish: require 2FA and disallow tokens; OIDC remains allowed
                            automation: require 2FA or a token with bypass 2FA
+  -i, --interactive        Select local packages and a GitHub workflow, then confirm setup
+  --ephemeral-auth         Use a temporary npm login session; always attempt logout on exit
   --github.repo            GitHub repository allowed to publish (owner/repo)
   --github.file            Workflow filename in .github/workflows (e.g. release.yml)
   --github.env             Required GitHub Actions environment (optional)
@@ -75,6 +80,7 @@ Options:
 GitHub configuration requires npm >= 11.15.0 and grants npm publish permission.
 
 Examples:
+  setup-npm-trusted-publish --interactive --ephemeral-auth
   unset NPM_TOKEN
   npm login --registry https://registry.npmjs.org
   setup-npm-trusted-publish @scope/my-package \\
@@ -111,7 +117,65 @@ if (values.version) {
   process.exit(0);
 }
 
-const packageName = positionals[0];
+const validPackageNameRegex = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+let packageName = positionals[0];
+
+async function runPackages(names, context = {}) {
+  const completed = [];
+  for (const [index, name] of names.entries()) {
+    console.log(`\n📦 ${index + 1}/${names.length}: ${name}`);
+    const args = [fileURLToPath(import.meta.url), name];
+    for (const key of ['registry', 'access', 'package-version', 'github.repo', 'github.file', 'github.env', 'mfa', 'wait-timeout']) {
+      if (values[key] !== undefined) args.push(`--${key}`, values[key]);
+    }
+    if (values['dry-run']) args.push('--dry-run');
+    const code = context.run ? await context.run(process.execPath, args) : await new Promise(resolve => {
+      const child = spawn(process.execPath, args, { stdio: 'inherit' });
+      child.on('error', error => { console.error(error.message); resolve(1); });
+      child.on('close', code => resolve(code ?? 1));
+    });
+    if (code !== 0) {
+      console.error(`Completed packages: ${completed.join(', ') || '(none)'}`);
+      console.error(`Failed package: ${name}. See above for any completed steps within this package.`);
+      console.error(`Not attempted: ${names.slice(index + 1).join(', ') || '(none)'}`);
+      return code;
+    }
+    completed.push(name);
+  }
+  console.log(`\n${values['dry-run'] ? 'Previewed' : 'Completed'} packages: ${completed.join(', ')}`);
+  return 0;
+}
+
+async function dispatchPackages(names) {
+  if (values['ephemeral-auth'] && !values['dry-run']) {
+    const { withEphemeralAuth } = await import('./session.js');
+    return withEphemeralAuth({ registry: values.registry, npmCommand: resolveNpmCommand }, context => runPackages(names, context));
+  }
+  return runPackages(names);
+}
+
+if (values.interactive) {
+  if (process.env.NPM_TOKEN && !values['dry-run'] && !values['ephemeral-auth']) {
+    console.error(`Error: Unset NPM_TOKEN and run npm login --registry ${values.registry} before interactive setup.`);
+    process.exit(1);
+  }
+  try {
+    const { interactiveSetup } = await import('./interactive.js');
+    const selection = await interactiveSetup({ packageName, values });
+    if (!selection) process.exit(0);
+    Object.assign(values, selection.values);
+    if (selection.packageNames.some(name => !validPackageNameRegex.test(name))) {
+      throw new Error('Selected packages contain an invalid npm package name.');
+    }
+    if (selection.packageNames.length > 1 || values['ephemeral-auth']) {
+      process.exit(await dispatchPackages(selection.packageNames));
+    }
+    packageName = selection.packageNames[0];
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
+}
 
 if (!packageName) {
   console.error('Error: Package name is required');
@@ -120,11 +184,15 @@ if (!packageName) {
 }
 
 // Validate package name
-const validPackageNameRegex = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
 if (!validPackageNameRegex.test(packageName)) {
   console.error(`Error: Invalid package name: ${packageName}`);
   console.error('Package names must be lowercase and can contain letters, numbers, hyphens, periods, and underscores');
   process.exit(1);
+}
+
+if (values['ephemeral-auth']) {
+  try { process.exit(await dispatchPackages([packageName])); }
+  catch (error) { console.error(`Error: ${error.message}`); process.exit(1); }
 }
 
 // npm is `npm.cmd` on Windows, which execFile cannot start (Node refuses to spawn a .cmd file without a shell).
@@ -480,7 +548,7 @@ try {
   if (configureSettings) {
     console.error(`Last completed step: ${completedStep}. Earlier changes have not been rolled back.`);
     console.error(`Package settings require interactive authentication. Run npm login --registry ${values.registry} and retry, completing the 2FA prompts.`);
-    console.error(`When finished: npm logout --registry ${values.registry}`);
+    if (!process.env.NPM_SETUP_EPHEMERAL_AUTH) console.error(`When finished: npm logout --registry ${values.registry}`);
   }
   process.exit(1);
 }
@@ -492,5 +560,5 @@ if (!values['dry-run']) {
     console.log(`Configure OIDC trusted publishing at https://www.npmjs.com/package/${packageName}/access`);
   }
   console.log(`Set up your CI/CD workflow to publish with OIDC`);
-  if (configureSettings) console.log(`When finished: npm logout --registry ${values.registry}`);
+  if (configureSettings && !process.env.NPM_SETUP_EPHEMERAL_AUTH) console.log(`When finished: npm logout --registry ${values.registry}`);
 }

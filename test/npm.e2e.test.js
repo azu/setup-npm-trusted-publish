@@ -1,7 +1,7 @@
 // E2E tests that run the CLI with the real npm CLI against a local fake registry.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startFakeRegistry } from './helpers/fake-registry.js';
 import { createSandbox, run, cliPath, npmCommand, packCli, findFilesContaining } from './helpers/sandbox.js';
@@ -150,6 +150,20 @@ describe('launched with npx', () => {
   });
   after(() => packSandbox.cleanup());
 
+  test('selects local packages through the packaged interactive CLI', async t => {
+    const ctx = await setupSettings(t);
+    await createProject(ctx, 'single');
+    const npx = npmCommand(['exec', '--yes', `--package=${tarball}`, '--',
+      'setup-npm-trusted-publish', '--interactive', '--dry-run', '--registry', ctx.registry]);
+    const result = await run(npx.command, npx.args, {
+      env: ctx.sandbox.env, cwd: ctx.sandbox.dirs.work, input: interactiveKeys()
+    });
+    succeeded(result);
+    assert.match(result.stdout, /Package: @test\/single/);
+    assert.match(result.stdout, /Workflow: release.yml/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
   test('publishes with npm', async (t) => {
     const { registry, sandbox } = await setup(t);
     const npx = npmCommand(['exec', '--yes', `--package=${tarball}`, '--', 'setup-npm-trusted-publish', 'via-npx', '--registry', registry.url]);
@@ -181,21 +195,420 @@ async function setupSettings(t) {
     const resolved = npmCommand([...args, '--registry', registry]);
     return run(resolved.command, resolved.args, { cwd: sandbox.dirs.work, env });
   };
-  const setupPackage = (args = [], extraEnv = {}) => run(process.execPath,
+  const setupPackage = (args = [], extraEnv = {}, options = {}) => run(process.execPath,
     [cliPath, packageName, '--registry', registry, ...args], {
-      cwd: sandbox.dirs.work, env: { ...env, ...extraEnv }
+      cwd: sandbox.dirs.work, env: { ...env, ...extraEnv }, ...options
     });
   const login = async () => {
     const result = await npm(['login']);
     assert.equal(result.code, 0, result.stderr);
     assert.match(await readFile(userconfig, 'utf8'), /_authToken=test-login-session/);
   };
-  return { registry, state, userconfig, npm, setupPackage, login };
+  const runInteractive = (args = [], input = '') => run(process.execPath,
+    [cliPath, '--interactive', '--registry', registry, ...args], {
+      cwd: sandbox.dirs.work, env, input, timeout: 30000
+    });
+  return { registry, state, userconfig, npm, setupPackage, login, sandbox, runInteractive };
 }
 
 function succeeded(result) {
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
 }
+
+// Send real keyboard events after each prompt has rendered. No prompt answers
+// are injected into the application or its UI library.
+function interactiveKeys({ packageKeys = ' \r', workflowKeys = '\x1b[B\r', environment = '', confirm } = {}) {
+  const steps = [
+    { waitFor: /(?:◯|\( \))\s+@test\//, keys: packageKeys },
+    { waitFor: 'GitHub repository (owner/repo)', keys: '\r' },
+    { waitFor: /[❯>]\s+checks\.yml/, keys: workflowKeys },
+    { waitFor: 'GitHub Actions environment (leave empty if unused)', keys: `${environment}\r` }
+  ];
+  if (confirm !== undefined) steps.push({ waitFor: 'Publish a placeholder if needed and apply these settings?', keys: confirm ? 'y' : 'n' });
+  return steps;
+}
+
+async function createProject(ctx, type = 'npm') {
+  const root = ctx.sandbox.dirs.work;
+  const manifest = { name: 'workspace-root', private: true };
+  if (type === 'npm') manifest.workspaces = ['packages/*'];
+  if (type === 'yarn') manifest.workspaces = { packages: ['packages/*'] };
+  if (type === 'single') {
+    manifest.name = '@test/single';
+    manifest.private = false;
+    manifest.repository = 'https://github.com/example/project.git';
+  }
+  await writeFile(join(root, 'package.json'), JSON.stringify(manifest));
+  if (type === 'pnpm') await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
+  if (type === 'lerna') await writeFile(join(root, 'lerna.json'), JSON.stringify({ packages: ['packages/*'] }));
+  if (type !== 'single') {
+    for (const name of ['alpha', 'beta', 'private']) {
+      const directory = join(root, 'packages', name);
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, 'package.json'), JSON.stringify({ name: `@test/${name}`, private: name === 'private' }));
+    }
+    // This package is not in a workspace and must not be offered.
+    await mkdir(join(root, 'fixtures'), { recursive: true });
+    await writeFile(join(root, 'fixtures', 'package.json'), JSON.stringify({ name: '@test/fixture' }));
+  }
+  await mkdir(join(root, '.github', 'workflows'), { recursive: true });
+  for (const file of ['checks.yml', 'release.yml']) {
+    await writeFile(join(root, '.github', 'workflows', file), 'name: Test\non: workflow_dispatch\n');
+  }
+  succeeded(await run('git', ['init', '--quiet'], { cwd: root, env: ctx.sandbox.env }));
+  succeeded(await run('git', ['remote', 'add', 'origin', 'git@github.com:example/project.git'], { cwd: root, env: ctx.sandbox.env }));
+  return root;
+}
+
+describe('package and workflow selection', () => {
+  for (const [form, definition] of [
+    ['string', 'environment: npm\n'],
+    ['object', 'environment:\n      name: npm\n      url: https://example.com\n']
+  ]) {
+    test(`uses workflow ${form} environment as the editable default`, async t => {
+      const ctx = await setupSettings(t);
+      const root = await createProject(ctx);
+      await writeFile(join(root, '.github', 'workflows', 'release.yml'), `jobs:\n  publish:\n    ${definition}`);
+      await ctx.login();
+      const result = await ctx.runInteractive([], interactiveKeys({ confirm: true }));
+      succeeded(result);
+      assert.match(result.stdout, /environment \(leave empty if unused\) \[npm\]/);
+      assert.equal(ctx.state.trust[0].claims.environment, 'npm');
+    });
+  }
+
+  for (const [description, keys, expected] of [
+    ['replaces', 'custom', 'custom'],
+    ['clears', '\x7f'.repeat(3), '(none)']
+  ]) {
+    test(`${description} the suggested workflow environment`, async t => {
+      const ctx = await setupSettings(t);
+      const root = await createProject(ctx);
+      await writeFile(join(root, '.github', 'workflows', 'release.yml'), 'jobs:\n  publish:\n    environment: npm\n');
+      const result = await ctx.runInteractive(['--dry-run'], interactiveKeys({ environment: keys }));
+      succeeded(result);
+      assert.ok(result.stdout.includes(`Environment: ${expected}`));
+      assert.equal(ctx.state.requests.length, 0);
+    });
+  }
+
+  test('chooses between multiple workflow environments instead of guessing', async t => {
+    const ctx = await setupSettings(t);
+    const root = await createProject(ctx);
+    await writeFile(join(root, '.github', 'workflows', 'release.yml'), 'jobs:\n  first:\n    environment: production\n  second:\n    environment:\n      name: staging\n');
+    const keys = interactiveKeys();
+    const result = await ctx.runInteractive(['--dry-run'], [
+      ...keys.slice(0, 3),
+      { waitFor: /❯\s+production/, keys: '\x1b[B\r' },
+      keys[3]
+    ]);
+    succeeded(result);
+    assert.match(result.stdout, /Environment: staging/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('does not pass an environment expression to npm trust', async t => {
+    const ctx = await setupSettings(t);
+    const root = await createProject(ctx);
+    await writeFile(join(root, '.github', 'workflows', 'release.yml'), 'jobs:\n  publish:\n    environment:\n      name: ${{ matrix.environment }}\n');
+    const result = await ctx.runInteractive(['--dry-run'], interactiveKeys({ environment: 'npm' }));
+    succeeded(result);
+    assert.match(result.stdout, /runtime environment name/);
+    assert.match(result.stdout, /Environment: npm/);
+    assert.doesNotMatch(result.stdout, /--env \$\{\{/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('explicit environment overrides workflow detection', async t => {
+    const ctx = await setupSettings(t);
+    const root = await createProject(ctx);
+    await writeFile(join(root, '.github', 'workflows', 'release.yml'), 'jobs:\n  publish:\n    environment: production\n');
+    const result = await ctx.runInteractive(['--github.env', 'custom', '--dry-run'], interactiveKeys().slice(0, 3));
+    succeeded(result);
+    assert.match(result.stdout, /Environment: custom/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('unreadable workflow settings allow manual environment input', async t => {
+    const ctx = await setupSettings(t);
+    const root = await createProject(ctx);
+    await writeFile(join(root, '.github', 'workflows', 'release.yml'), 'jobs: [');
+    const result = await ctx.runInteractive(['--dry-run'], interactiveKeys({ environment: 'manual' }));
+    succeeded(result);
+    assert.match(result.stdout, /Enter the environment manually/);
+    assert.match(result.stdout, /Environment: manual/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('keeps checked packages when filtering and configures every selected package', async t => {
+    const ctx = await setupSettings(t);
+    await createProject(ctx);
+    await ctx.login();
+    const result = await ctx.runInteractive([], [
+      { waitFor: /(?:◯|\( \))\s+@test\/alpha/, keys: ' beta' },
+      { waitFor: 'Filter: beta', keys: ' \r' },
+      ...interactiveKeys({ confirm: true }).slice(1)
+    ]);
+    succeeded(result);
+    assert.match(result.stdout, /Packages: @test\/alpha, @test\/beta/);
+    assert.match(result.stdout, /Completed packages: @test\/alpha, @test\/beta/);
+    assert.deepEqual([...ctx.state.packages.keys()], ['@test/alpha', '@test/beta']);
+    for (const name of ['@test/alpha', '@test/beta']) {
+      assert.equal(ctx.state.trustByPackage.get(name)[0].claims.workflow_ref.file, 'release.yml');
+      assert.equal(ctx.state.mfaByPackage.get(name).publish_requires_tfa, true);
+    }
+  });
+
+  test('stops a batch on failure and reports completed and unattempted packages', async t => {
+    const ctx = await setupSettings(t);
+    const root = await createProject(ctx);
+    await mkdir(join(root, 'packages', 'gamma'));
+    await writeFile(join(root, 'packages', 'gamma', 'package.json'), JSON.stringify({ name: '@test/gamma' }));
+    await ctx.login();
+    ctx.state.denyMfaPackages.add('@test/beta');
+    const result = await ctx.runInteractive([], interactiveKeys({
+      packageKeys: ' \x1b[B \x1b[B \r', confirm: true
+    }));
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Completed packages: @test\/alpha/);
+    assert.match(result.stderr, /Failed package: @test\/beta/);
+    assert.match(result.stderr, /Not attempted: @test\/gamma/);
+    assert.equal(ctx.state.mfaByPackage.get('@test/alpha').publish_requires_tfa, true);
+    assert.ok(!ctx.state.mfaByPackage.has('@test/beta'));
+    assert.ok(!ctx.state.packages.has('@test/gamma'));
+  });
+
+  test('previews all selected packages without contacting the registry', async t => {
+    const ctx = await setupSettings(t);
+    await createProject(ctx);
+    const result = await ctx.runInteractive(['--dry-run'], interactiveKeys({ packageKeys: ' \x1b[B \r' }));
+    succeeded(result);
+    assert.match(result.stdout, /Previewed packages: @test\/alpha, @test\/beta/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('filters package paths and workflow names with case-insensitive substring search', async t => {
+    const ctx = await setupSettings(t);
+    await createProject(ctx);
+    const result = await ctx.runInteractive(['--dry-run'], [
+      { waitFor: /(?:◯|\( \))\s+@test\/alpha/, keys: 'PACKAGES/BETA' },
+      { waitFor: /(?:◯|\( \))\s+@test\/beta/, keys: ' \r' },
+      { waitFor: 'GitHub repository (owner/repo)', keys: '\r' },
+      { waitFor: /[❯>]\s+checks\.yml/, keys: 'LEASE' },
+      { waitFor: /[❯>]\s+release\.yml/, keys: '\r' },
+      { waitFor: 'GitHub Actions environment (leave empty if unused)', keys: '\r' }
+    ]);
+    succeeded(result);
+    assert.match(result.stdout, /Package: @test\/beta/);
+    assert.match(result.stdout, /Workflow: release.yml/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('backspace restores choices after a search with no matches', async t => {
+    const ctx = await setupSettings(t);
+    await createProject(ctx);
+    const result = await ctx.runInteractive(['--dry-run'], [
+      { waitFor: /(?:◯|\( \))\s+@test\/alpha/, keys: 'missing' },
+      { waitFor: 'No matches for this query.', keys: '\x7f'.repeat(7) + 'beta' },
+      { waitFor: /(?:◯|\( \))\s+@test\/beta/, keys: ' \r' },
+      ...interactiveKeys().slice(1)
+    ]);
+    succeeded(result);
+    assert.match(result.stdout, /Package: @test\/beta/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('submitting a search with no matches cannot select or publish a package', async t => {
+    const ctx = await setupSettings(t);
+    await createProject(ctx);
+    const result = await ctx.runInteractive([], [
+      { waitFor: /(?:◯|\( \))\s+@test\/alpha/, keys: 'missing' },
+      { waitFor: 'No matches for this query.', keys: ' \x1b[C\x1b[D\r' },
+      { waitFor: 'Select at least one package.', keys: '\x03' },
+      { waitFor: 'Setup cancelled.', keys: '' }
+    ]);
+    succeeded(result);
+    assert.match(result.stdout, /Select at least one package/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  for (const [name, key] of [['Escape', '\x1b'], ['Ctrl+C', '\x03']]) {
+    test(`${name} cancels selection without registry access`, async t => {
+      const ctx = await setupSettings(t);
+      await createProject(ctx);
+      const result = await ctx.runInteractive([], [
+        { waitFor: /(?:◯|\( \))\s+@test\/alpha/, keys: key },
+        { waitFor: 'Setup cancelled.', keys: '' }
+      ]);
+      succeeded(result);
+      assert.equal(ctx.state.requests.length, 0);
+    });
+  }
+
+  test('uses root repository metadata when a workspace only declares repository.directory', async t => {
+    const ctx = await setupSettings(t);
+    const root = await createProject(ctx);
+    succeeded(await run('git', ['remote', 'remove', 'origin'], { cwd: root, env: ctx.sandbox.env }));
+    const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+    manifest.repository = { url: 'https://github.com/example/project.git' };
+    await writeFile(join(root, 'package.json'), JSON.stringify(manifest));
+    await writeFile(join(root, 'packages', 'alpha', 'package.json'), JSON.stringify({
+      name: '@test/alpha', repository: { directory: 'packages/alpha' }
+    }));
+    const result = await ctx.runInteractive(['--dry-run'], interactiveKeys());
+    succeeded(result);
+    assert.match(result.stdout, /GitHub repository \(owner\/repo\).*example\/project/);
+    assert.match(result.stdout, /MFA: publish \(require 2FA; disallow access tokens; allow trusted publishing\)/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('selects workspace package and workflow before publishing and configuring settings', async t => {
+    const ctx = await setupSettings(t);
+    const root = await createProject(ctx);
+    const originalManifest = await readFile(join(root, 'package.json'), 'utf8');
+    await ctx.login();
+    const result = await ctx.runInteractive([], interactiveKeys({ packageKeys: '\x1b[B \r', environment: 'production', confirm: true }));
+    succeeded(result);
+    assert.match(result.stdout, /@test\/alpha \(packages\/alpha\/package.json\)/);
+    assert.doesNotMatch(result.stdout, /@test\/(private|fixture)/);
+    assert.equal(ctx.state.packages.get('@test/beta').name, '@test/beta');
+    assert.deepEqual(ctx.state.trust[0].claims, {
+      repository: 'example/project', workflow_ref: { file: 'release.yml' }, environment: 'production'
+    });
+    assert.deepEqual(ctx.state.mfa, { publish_requires_tfa: true, automation_token_overrides_tfa: false });
+    assert.equal(await readFile(join(root, 'package.json'), 'utf8'), originalManifest);
+  });
+
+  for (const type of ['yarn', 'pnpm', 'lerna', 'single']) {
+    test(`discovers ${type} packages without registry access in dry-run`, async t => {
+      const ctx = await setupSettings(t);
+      await createProject(ctx, type);
+      const result = await ctx.runInteractive(['--dry-run'], interactiveKeys());
+      succeeded(result);
+      assert.match(result.stdout, new RegExp(`Package: @test/${type === 'single' ? 'single' : 'alpha'}`));
+      assert.match(result.stdout, /Workflow: release.yml/);
+      assert.doesNotMatch(result.stdout, /@test\/(private|fixture)/);
+      assert.equal(ctx.state.requests.length, 0);
+    });
+  }
+
+  test('cancellation and closed input stop before any registry requests', async t => {
+    const ctx = await setupSettings(t);
+    await createProject(ctx);
+    const cancelled = await ctx.runInteractive([], interactiveKeys({ confirm: false }));
+    succeeded(cancelled);
+    assert.match(cancelled.stdout, /Setup cancelled/);
+    const closed = await ctx.runInteractive([], '');
+    assert.equal(closed.code, 1);
+    assert.match(closed.stderr, /Input closed/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('explicit package and flags remain usable in interactive preview', async t => {
+    const ctx = await setupSettings(t);
+    await createProject(ctx);
+    const result = await ctx.runInteractive([
+      '@test/beta', '--github.repo', 'other/repository', '--github.file', 'release.yml',
+      '--github.env', 'npm', '--mfa', 'automation', '--dry-run'
+    ]);
+    succeeded(result);
+    assert.match(result.stdout, /Package: @test\/beta/);
+    assert.match(result.stdout, /Repository: other\/repository/);
+    assert.match(result.stdout, /MFA: automation/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('reports missing publishable packages without scanning unrelated directories', async t => {
+    const ctx = await setupSettings(t);
+    await writeFile(join(ctx.sandbox.dirs.work, 'package.json'), JSON.stringify({ name: 'private-root', private: true }));
+    const result = await ctx.runInteractive(['--dry-run']);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /No publishable packages found/);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+});
+
+describe('temporary npm authentication', () => {
+  test('shares one temporary login session across selected packages', async t => {
+    const ctx = await setupSettings(t);
+    await createProject(ctx);
+    const result = await ctx.runInteractive(['--ephemeral-auth'], interactiveKeys({
+      packageKeys: ' \x1b[B \r', confirm: true
+    }));
+    succeeded(result);
+    assert.deepEqual([...ctx.state.packages.keys()], ['@test/alpha', '@test/beta']);
+    assert.equal(ctx.state.trustByPackage.size, 2);
+    assert.equal(ctx.state.mfaByPackage.size, 2);
+    assert.equal(ctx.state.requests.filter(req => req.method === 'POST' && req.path === '/-/v1/login').length, 1);
+    assert.equal(ctx.state.requests.filter(req => req.method === 'DELETE').length, 1);
+    assert.equal(ctx.state.sessions.size, 0);
+    assert.ok(result.stdout.indexOf('apply these settings?') < result.stdout.indexOf('Logging in with a temporary'));
+  });
+
+  test('logs out and removes temporary credentials while preserving existing user and project authentication', async t => {
+    const ctx = await setupSettings(t);
+    const registryHost = new URL(ctx.registry).host;
+    const original = `//${registryHost}/:_authToken=existing-session\n`;
+    await writeFile(ctx.userconfig, original);
+    ctx.state.sessions.add('existing-session');
+    const projectConfig = `//${registryHost}/:_authToken=${granularToken}\n`;
+    await writeFile(join(ctx.sandbox.dirs.work, '.npmrc'), projectConfig);
+    const result = await ctx.setupPackage([...githubOptions, '--mfa', 'publish', '--ephemeral-auth'], { NPM_TOKEN: granularToken });
+    succeeded(result);
+    assert.equal(ctx.state.mfa.publish_requires_tfa, true);
+    assert.equal(ctx.state.sessions.has('existing-session'), true);
+    assert.equal(ctx.state.sessions.has(sessionToken), false);
+    assert.equal(await readFile(ctx.userconfig, 'utf8'), original);
+    assert.equal(await readFile(join(ctx.sandbox.dirs.work, '.npmrc'), 'utf8'), projectConfig);
+    assert.deepEqual((await readdir(ctx.sandbox.dirs.tmp)).filter(name => name.startsWith('npm-setup-session-')), []);
+    assert.equal(ctx.state.requests.filter(req => req.method === 'DELETE').length, 1);
+    assert.doesNotMatch(result.stdout, /When finished: npm logout/);
+  });
+
+  test('logs out after package setup fails', async t => {
+    const ctx = await setupSettings(t);
+    ctx.state.denyTrust = true;
+    const result = await ctx.setupPackage([...githubOptions, '--ephemeral-auth']);
+    assert.equal(result.code, 1);
+    assert.equal(ctx.state.sessions.size, 0);
+    assert.equal(ctx.state.requests.filter(req => req.method === 'DELETE').length, 1);
+    assert.deepEqual((await readdir(ctx.sandbox.dirs.tmp)).filter(name => name.startsWith('npm-setup-session-')), []);
+  });
+
+  test('retries failed logout, reports failure, and retains protected credentials for recovery', async t => {
+    const ctx = await setupSettings(t);
+    ctx.state.denyLogout = true;
+    const result = await ctx.setupPackage([...githubOptions, '--ephemeral-auth']);
+    assert.equal(result.code, 1);
+    assert.match(result.stdout, /Completed packages:/);
+    assert.match(result.stderr, /Temporary session logout failed/);
+    assert.equal(ctx.state.requests.filter(req => req.method === 'DELETE').length, 3);
+    const authFile = result.stderr.match(/Authentication file retained for retry: (.+)/)[1];
+    assert.ok(authFile.startsWith(ctx.sandbox.dirs.tmp));
+    if (process.platform !== 'win32') assert.equal((await stat(authFile)).mode & 0o777, 0o600);
+    ctx.state.denyLogout = false;
+    succeeded(await ctx.npm(['logout', '--userconfig', authFile]));
+    assert.equal(ctx.state.sessions.size, 0);
+  });
+
+  test('dry-run and cancelled confirmation do not log in', async t => {
+    const ctx = await setupSettings(t);
+    succeeded(await ctx.setupPackage([...githubOptions, '--ephemeral-auth', '--dry-run']));
+    await createProject(ctx);
+    const cancelled = await ctx.runInteractive(['--ephemeral-auth'], interactiveKeys({ confirm: false }));
+    succeeded(cancelled);
+    assert.equal(ctx.state.requests.length, 0);
+  });
+
+  test('Ctrl+C runs logout before exiting', { skip: process.platform === 'win32' ? 'Windows process.kill does not deliver console Ctrl+C' : false }, async t => {
+    const ctx = await setupSettings(t);
+    const result = await ctx.setupPackage([...githubOptions, '--ephemeral-auth'], {}, { signalOnOutput: '1/1:' });
+    assert.equal(result.code, 130);
+    assert.equal(ctx.state.sessions.size, 0);
+    assert.equal(ctx.state.requests.filter(req => req.method === 'DELETE').length, 1);
+    assert.deepEqual((await readdir(ctx.sandbox.dirs.tmp)).filter(name => name.startsWith('npm-setup-session-')), []);
+  });
+});
 
 describe('trusted publishing and MFA via npm login', () => {
   test('waits for registry visibility before configuring trust and MFA', { timeout: 30000 }, async t => {

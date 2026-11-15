@@ -47,6 +47,8 @@ Options:
 - `--github.file <workflow.yml>` - Workflow filename inside `.github/workflows` (requires `--github.repo`)
 - `--github.env <environment>` - GitHub Actions environment, if the publishing job uses one
 - `--wait-timeout <seconds>` - After publishing, wait up to this many seconds for the package to become available before configuring settings (default: `300`)
+- `-i, --interactive` - Select packages and a shared GitHub publishing workflow from the current repository, then confirm setup
+- `--ephemeral-auth` - Log in with a temporary npm session and attempt logout on completion, failure, or interruption
 
 Environment Variables:
 - `NPM_TOKEN` - npm authentication token for users who don't have npm login configured locally. The token is never written to disk.
@@ -64,6 +66,45 @@ setup-npm-trusted-publish my-package --package-version 0.0.1
 ```
 
 Without `--github.*` or `--mfa`, configure trusted publishing and publishing MFA on npmjs.com under `https://www.npmjs.com/package/<package-name>/access` after publishing.
+
+## Select packages and a workflow interactively
+
+Run this from the repository that will publish the package:
+
+```bash
+npx --registry https://registry.npmjs.org setup-npm-trusted-publish --interactive --ephemeral-auth
+```
+
+Use ↑/↓ to move between packages and Space to check or uncheck them. Select one or more packages, then press Enter. Type to filter by package name or manifest path; checked packages stay selected when hidden by the filter. Workflow selection also supports ↑/↓, typing to filter, and Enter to confirm. Matching is case-insensitive and supports partial matches. Backspace edits the search; Escape or Ctrl+C cancels setup. The CLI suggests the GitHub repository from the `origin` remote, falling back to `package.json`'s `repository` field, and lets you edit it. The terminal UI uses Node.js built-ins and has no UI dependencies.
+
+The selected workflow's `jobs.*.environment` (a string or an object with `name`) supplies the environment default when there is one static name. Multiple names are offered for selection; runtime expressions such as `${{ matrix.environment }}` require you to choose or enter the actual name. Enter accepts a suggested value, typing replaces it, and Backspace or Ctrl+U lets you clear it. `--github.env` overrides detection.
+
+```text
+? Which packages should be configured? ›
+◉ @myorg/foo (packages/foo/package.json)
+◉ @myorg/bar (packages/bar/package.json)
+
+? GitHub repository (owner/repo) › myorg/my-repo
+
+? Which workflow publishes the package? (type to filter, ↑/↓ to move) › release
+❯ release.yml
+
+? GitHub Actions environment (leave empty if unused) ›
+```
+
+Package discovery uses [`@monorepo-utils/package-utils`](https://github.com/azu/monorepo-utils/tree/master/packages/@monorepo-utils/package-utils) for npm/Yarn workspaces, `pnpm-workspace.yaml`, and Lerna. The root package is also offered when it has a name and is publishable. Packages with `private: true` are excluded. Discovery starts at the Git repository root, or the current directory outside Git; it does not recursively scan unrelated `package.json` files.
+
+Workflows come from `.github/workflows/*.yml` and `*.yaml`. The CLI displays all selected settings before asking whether to publish a placeholder if needed and configure trust/MFA. MFA defaults to `publish`; existing flags such as `--github.repo`, `--github.file`, `--github.env`, and `--mfa` override the corresponding choices. `--interactive --dry-run` previews the selection without contacting the registry. Cancelling the final confirmation makes no registry changes.
+
+All selected packages use the same repository, workflow, environment, and MFA policy. Packages are configured sequentially through the normal setup flow. If one fails, setup stops and lists completed packages, the failed package, and packages not attempted. The failed package may have completed earlier steps, as reported in its output; completed changes are retained.
+
+With `--ephemeral-auth`, login starts after confirmation. Complete npm's browser authentication and 2FA prompts; the tool uses one temporary session for all selected packages, then logs out. Without this flag, run `npm login` before setup and `npm logout` when finished, as shown below.
+
+### Temporary login session
+
+`--ephemeral-auth` also works with an explicit package name and settings flags. It uses separate temporary npm configuration files and ignores inherited auth tokens, leaving existing user and project `.npmrc` files and sessions untouched. `--dry-run` and cancelled confirmation never log in.
+
+Logout runs after success, setup errors, and Ctrl+C/SIGTERM interruption, with up to three attempts. If logout still fails, the command exits with an error and reports the protected authentication file retained for retry; use `npm logout --registry <registry> --userconfig <reported-file>` to revoke that session, then remove the temporary directory. Forced termination such as SIGKILL or a machine shutdown cannot run cleanup.
 
 ## Complete example with local npm login
 
@@ -155,7 +196,7 @@ The generated README explicitly indicates:
 
 Publishing a placeholder and changing package settings have different authentication requirements. npm's [Registry API documentation](https://api-docs.npmjs.com/) says that bypass-2FA Granular Access Tokens cannot change package access or Trusted Publisher settings. `npm login` provides a session for interactive authentication.
 
-When `--github.*` or `--mfa` is specified, this tool requires `NPM_TOKEN` to be unset, verifies authentication with `npm whoami`, and lets npm handle authentication challenges. `whoami` confirms the identity, not the token type or its permission to change settings. A Granular Access Token saved in `.npmrc` may still fail at the settings step; run `npm login` again to replace it with a session. The tool does not infer token type from its prefix.
+When `--github.*` or `--mfa` is specified, this tool requires `NPM_TOKEN` to be unset (or `--ephemeral-auth` to isolate authentication), verifies authentication with `npm whoami`, and lets npm handle authentication challenges. `whoami` confirms the identity, not the token type or its permission to change settings. A Granular Access Token saved in `.npmrc` may still fail at the settings step; run `npm login` again to replace it with a session. The tool does not infer token type from its prefix.
 
 For non-interactive use, publish the placeholder with `NPM_TOKEN`, then configure settings on npmjs.com. For interactive use, follow the complete local login example above.
 
