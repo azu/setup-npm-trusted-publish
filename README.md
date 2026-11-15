@@ -53,7 +53,7 @@ Options:
 Environment Variables:
 - `NPM_TOKEN` - npm authentication token for users who don't have npm login configured locally. The token is never written to disk.
   - npm: a temporary `.npmrc` is created in the package directory with `//registry.npmjs.org/:_authToken=${NPM_TOKEN}`. npm expands `${NPM_TOKEN}` at runtime. The `.npmrc` is cleaned up with the temporary directory after publishing.
-  - pnpm: the token is passed to `pnpm publish` through its environment (`pnpm_config_//registry.npmjs.org/:_authToken` and `npm_config_//registry.npmjs.org/:_authToken`), because pnpm 11+ does not expand `${NPM_TOKEN}` in a project `.npmrc`.
+  - pnpm: the same temporary `.npmrc` is passed to `pnpm publish` through `npm_config_userconfig`, because pnpm 11+ does not expand `${NPM_TOKEN}` in a project `.npmrc` (pnpm 10 reads it as the project `.npmrc`). The token is not passed as a `pnpm_config_//<host>/:_authToken` environment variable, because `/bin/sh` (dash) drops such names when pnpm runs through a shell shim.
 
 Examples:
 ```bash

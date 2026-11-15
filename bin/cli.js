@@ -441,18 +441,19 @@ For more details about npm's trusted publishing feature, see:
     const publishEnv = { ...process.env };
     if (npmToken) {
       const registryUrl = new URL(opts.registry);
+      // Write only a `${NPM_TOKEN}` reference, never the token itself. npm reads it via --userconfig.
+      // pnpm 11+ ignores `${...}` in a project .npmrc and has no --userconfig, but reads it through
+      // npm_config_userconfig; pnpm 10 (which publishes through npm) reads it as the project .npmrc.
+      // Do not pass the token as `pnpm_config_//<host>/:_authToken` env vars: that name is not a valid
+      // shell identifier, so dash drops it when pnpm is started through a `#!/bin/sh` shim
+      // (pnpm self-update / pnpm/action-setup), and publishing fails with 401.
+      const npmrcPath = join(pkgDir, '.npmrc');
+      await writeFile(
+        npmrcPath,
+        `registry=${opts.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
+      );
       if (packageManager === 'pnpm') {
-        // pnpm 11+ ignores `${NPM_TOKEN}` in a project .npmrc and has no --userconfig, so pass the token
-        // through the environment instead of writing it to disk: pnpm_config_ for pnpm 11.6+, npm_config_ for pnpm 10
-        // (which publishes through npm).
-        const authKey = `//${registryUrl.host}/:_authToken`;
-        publishEnv[`pnpm_config_${authKey}`] = npmToken;
-        publishEnv[`npm_config_${authKey}`] = npmToken;
-      } else {
-        await writeFile(
-          join(pkgDir, '.npmrc'),
-          `registry=${opts.registry}\n//${registryUrl.host}/:_authToken=\${NPM_TOKEN}\n`
-        );
+        publishEnv.npm_config_userconfig = npmrcPath;
       }
       console.log(`🔑 Using NPM_TOKEN for authentication`);
     }
