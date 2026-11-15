@@ -9,10 +9,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -29,10 +34,15 @@ jobs:
           node-version: 'lts/*'
 
       - name: Install pnpm
-        run: npm install --global pnpm@latest && pnpm --version
-        shell: bash
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: latest
+          run_install: false
 
       # E2E tests run the real npm and pnpm CLIs against a local fake registry (127.0.0.1) inside an isolated HOME.
       # They never read real credentials and never publish to the real npm registry.
+      - name: Install dependencies
+        run: npm ci
+
       - name: Test
         run: npm test

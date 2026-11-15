@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 CLI tool to set up OIDC trusted publishing for npm packages. It publishes a minimal placeholder package. With `--github.repo` / `--github.file` and/or `--mfa`, it configures package settings interactively after `npm login`; existing packages skip publishing. Without these flags, users configure settings on npmjs.com.
 
-`npm trust` requires npm >= 11.15.0 and account-level 2FA. Bypass-2FA Granular Access Tokens cannot change access/trust settings. For interactive setup, require `NPM_TOKEN` to be unset and use local npm login credentials with inherited stdio for npm authentication prompts. Do not infer token type from credential source or prefix; `npm whoami` only verifies identity. Non-interactive `NPM_TOKEN` use remains placeholder-only. Dry runs with settings flags must not contact or mutate the registry.
+`npm trust` requires npm >= 11.15.0 and account-level 2FA. Check the npm version before starting an ephemeral login session, including interactive and batch setup; unsupported versions must not contact the registry or create temporary credentials. Bypass-2FA Granular Access Tokens cannot change access/trust settings. For interactive setup, require `NPM_TOKEN` to be unset and use local npm login credentials with inherited stdio for npm authentication prompts. Do not infer token type from credential source or prefix; `npm whoami` only verifies identity. Non-interactive `NPM_TOKEN` use remains placeholder-only. Dry runs with settings flags must not contact or mutate the registry.
 
 ## Commands
 
@@ -18,7 +18,7 @@ CLI tool to set up OIDC trusted publishing for npm packages. It publishes a mini
 npm test
 ```
 
-No build step — the CLI is a single ES module file (`bin/cli.js`) using only Node.js built-ins.
+No build step. `bin/cli.js` runs the publish/settings flow; `bin/interactive.js` uses `@monorepo-utils/package-utils` for discovery and `yaml` for workflow environment defaults. `bin/terminal.js` implements arrow-key selection, filtering, text, and confirmation with Node.js built-ins and no UI dependencies. Runtime dependencies are bundled in the published package so npx/pnpm execution remains self-contained. Run `npm ci` before tests.
 
 ## Tests
 
@@ -28,10 +28,13 @@ No build step — the CLI is a single ES module file (`bin/cli.js`) using only N
 
 ## Architecture
 
-All logic is in `bin/cli.js`. Key function:
+The publish/settings flow is in `bin/cli.js`. Key function:
 
 - `publishPlaceholder(pkgName, opts)` — creates temp dir with placeholder package.json/README and publishes; swallows "cannot publish over the previously published versions" so re-runs after unpublish do not abort the rest of the flow
 - `detectPackageManager()` / `resolveNpmCommand()` / `resolvePnpmCommand()` — choose and locate the package manager used for publishing (Windows: run the entry script with Node instead of the `.cmd` shim)
+- `interactiveSetup()` in `bin/interactive.js` — discover packages from workspace definitions plus the root manifest, exclude private packages, select multiple packages with filtering, choose a shared GitHub repository/workflow/environment, and confirm before reusing the normal settings flow. Batches invoke the normal CLI sequentially for each package; failures stop the batch and report completed/failed/unattempted packages. No registry access occurs before confirmation. `--interactive --dry-run` only reads local files. Test this through the real CLI in `test/npm.e2e.test.js`, sending keyboard events after prompts render (no prompt injection), including arrows, filtering, cancellation, batches, and npx packaging.
+- `suggestedEnvironment()` reads static `jobs.*.environment` strings or `.name` values from the selected workflow. Multiple names prompt for a choice; expressions require manual input. Explicit `--github.env` overrides detection. Defaults remain editable and can be cleared.
+- `withEphemeralAuth()` in `bin/session.js` — opt-in `--ephemeral-auth` uses an isolated cwd/userconfig/globalconfig and sanitized auth environment. Login follows interactive confirmation; one session covers the batch. Finally attempt logout on normal/error/SIGINT/SIGTERM exits, retry up to three times, and only remove the configuration after successful logout. Logout failure exits nonzero and retains protected credentials for recovery. Dry runs and cancelled confirmation never log in. Existing user/project authentication must remain untouched. Test with actual npm against the local registry, including interrupted and failed cleanup paths.
 
 Package manager: `detectPackageManager()` picks pnpm when `npm_config_user_agent` starts with `pnpm/` (`pnpm dlx` / `pnpx`), otherwise npm (npx, direct run, unknown). `npm_execpath` is not used for detection (pnpm 10 does not set it for `pnpm dlx`); `resolvePnpmCommand()` only uses it to locate the launching pnpm. Never retry with the other package manager on failure.
 

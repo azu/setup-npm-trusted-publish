@@ -8,6 +8,7 @@ import * as fsSync from 'node:fs';
 import { join, dirname, delimiter } from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const cliPath = join(repoRoot, 'bin', 'cli.js');
@@ -80,15 +81,43 @@ export async function createSandbox({ registryUrl }) {
 }
 
 // Run a command without a shell. Resolves with { code, stdout, stderr } and never rejects on a non-zero exit.
-export function run(command, args, { env, cwd, timeout = 120_000 } = {}) {
+export function run(command, args, { env, cwd, input, signalOnOutput, timeout = 120_000 } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { env, cwd, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+    let step = 0;
+    const child = execFile(command, args, { env, cwd, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       if (error && typeof error.code !== 'number') {
         reject(Object.assign(error, { stdout, stderr }));
         return;
       }
-      resolve({ code: error ? error.code : 0, stdout: stdout.toString(), stderr: stderr.toString() });
+      if (!error && Array.isArray(input) && step !== input.length) {
+        reject(new Error(`Command exited after ${step}/${input.length} keyboard steps.\n${stdout}`));
+        return;
+      }
+      resolve({ code: error ? error.code : 0, stdout: stripVTControlCharacters(stdout.toString()), stderr: stderr.toString() });
     });
+    if (signalOnOutput) {
+      let seen = '', sent = false;
+      child.stdout.on('data', chunk => {
+        seen += chunk;
+        if (!sent && seen.includes(signalOnOutput)) { sent = true; child.kill('SIGINT'); }
+      });
+    }
+    if (Array.isArray(input)) {
+      let output = '';
+      child.stdout.on('data', chunk => {
+        if (step >= input.length) return;
+        output += chunk.toString();
+        const { waitFor, keys } = input[step];
+        const text = stripVTControlCharacters(output);
+        if (typeof waitFor === 'string' ? text.includes(waitFor) : waitFor.test(text)) {
+          step++;
+          output = '';
+          child.stdin.write(keys);
+          if (step === input.length) child.stdin.end();
+        }
+      });
+      child.stdin.on('error', error => { if (error.code !== 'EPIPE') reject(error); });
+    } else if (input !== undefined) child.stdin.end(input);
   });
 }
 

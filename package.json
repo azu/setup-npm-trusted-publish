@@ -31,5 +31,13 @@
   "files": [
     "bin",
     "README.md"
+  ],
+  "dependencies": {
+    "@monorepo-utils/package-utils": "^2.11.0",
+    "yaml": "^2.9.1"
+  },
+  "bundleDependencies": [
+    "@monorepo-utils/package-utils",
+    "yaml"
   ]
 }

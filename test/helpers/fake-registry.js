@@ -17,8 +17,9 @@ export async function startFakeRegistry({ token, published = {}, settings = fals
   const packages = new Map(Object.entries(published).map(([name, versions]) => [name, new Set(versions)]));
   const state = {
     requests, packages: new Map(), sessions: new Set(),
-    trust: [], mfa: null, denyTrust: false, denyMfa: false,
-    metadataError: null, denyPublish: false,
+    trust: [], mfa: null, trustByPackage: new Map(), mfaByPackage: new Map(),
+    denyTrust: false, denyMfa: false, denyMfaPackages: new Set(),
+    metadataError: null, denyPublish: false, denyLogout: false,
     visibilityDelayReads: 0, pendingVisibilityReads: 0
   };
 
@@ -60,21 +61,26 @@ export async function startFakeRegistry({ token, published = {}, settings = fals
     if (settings) {
       if (!authorized) return send(401, { error: 'Authentication required' });
       if (pathname.startsWith('/-/user/token/') && req.method === 'DELETE') {
+        if (state.denyLogout) return send(503, { error: 'Logout unavailable' });
         state.sessions.delete(credential);
         return send(200, { ok: true });
       }
       if (pathname.endsWith('/trust')) {
-        if (req.method === 'GET') return send(200, state.trust);
+        const packageName = decodeURIComponent(pathname).slice('/-/package/'.length, -'/trust'.length);
+        if (req.method === 'GET') return send(200, state.trustByPackage.get(packageName) || []);
         if (state.pendingVisibilityReads > 0) return send(404, { error: 'Package not yet available' });
         if (auth !== 'session' || state.denyTrust) return send(403, { error: 'Interactive authentication required' });
-        if (state.trust.length) return send(409, { error: 'Trust already configured' });
+        if (state.trustByPackage.has(packageName)) return send(409, { error: 'Trust already configured' });
         state.trust = record.body.map(config => ({ ...config, id: 'test-trust-id' }));
+        state.trustByPackage.set(packageName, state.trust);
         return send(200, state.trust);
       }
       if (pathname.endsWith('/access') && req.method === 'POST') {
+        const packageName = decodeURIComponent(pathname).slice('/-/package/'.length, -'/access'.length);
         if (state.pendingVisibilityReads > 0) return send(404, { error: 'Package not yet available' });
-        if (auth !== 'session' || state.denyMfa) return send(403, { error: 'Interactive authentication required' });
+        if (auth !== 'session' || state.denyMfa || state.denyMfaPackages.has(packageName)) return send(403, { error: 'Interactive authentication required' });
         state.mfa = record.body;
+        state.mfaByPackage.set(packageName, state.mfa);
         return send(200, { ok: true });
       }
       if (req.method === 'GET' && state.metadataError) return send(state.metadataError, { error: 'Registry unavailable' });
