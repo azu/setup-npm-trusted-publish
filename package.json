@@ -26,14 +26,14 @@
   },
   "homepage": "https://github.com/azu/setup-npm-trusted-publish#readme",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.17.0"
   },
   "files": [
     "bin",
     "README.md"
   ],
   "dependencies": {
-    "@monorepo-utils/package-utils": "^2.11.0",
+    "@monorepo-utils/package-utils": "^3.0.2",
     "yaml": "^2.9.1"
   },
   "bundleDependencies": [
